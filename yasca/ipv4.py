@@ -151,7 +151,11 @@ class IPv4(EtherProtoHeader, IPChainedHeader, IPChecksumable):
         )
 
     @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+    def parse_header_from_buffer(
+        cls,
+        buffer: Buffer,
+        ctx: PacketParseCtx,
+    ) -> Self:
         i = buffer.pop_int(1)
         ver = IPVersion.wrap((i >> 4) & 0xf)
         ihl = i & 0xf

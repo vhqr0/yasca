@@ -277,7 +277,7 @@ class ICMPv6NDOpt(Packet):
         raise NotImplementedError
 
     @classmethod
-    def parse_from_buffer(
+    def parse_header_from_buffer(
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
@@ -300,6 +300,12 @@ class ICMPv6NDOpt(Packet):
         ctx: PacketParseCtx,
     ) -> Self:
         raise NotImplementedError
+
+    def guess_payload_cls(
+        self,
+        ctx: PacketParseCtx,
+    ) -> Optional[type[Packet]]:  # type: ignore
+        return ICMPv6NDOpt
 
 
 class ICMPv6NDOptUnknown(ICMPv6NDOpt):

@@ -209,7 +209,10 @@ class IPv6Opt(Packet):
     ) -> Self:
         raise NotImplementedError
 
-    def guess_payload_cls(self, ctx) -> Optional[type[Packet]]:  # type: ignore
+    def guess_payload_cls(
+        self,
+        ctx: PacketParseCtx,
+    ) -> Optional[type[Packet]]:  # type: ignore
         return IPv6Opt
 
 

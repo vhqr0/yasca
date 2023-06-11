@@ -62,7 +62,7 @@ class IPChainedHeader(Packet):
     ) -> int:
         return IPProto.pop_from_buffer(buffer)
 
-    def guess_payload_cls(self, ctx) -> Optional[type['Packet']]:
+    def guess_payload_cls(self, ctx) -> Optional[type[Packet]]:
         if self.nh is not None:
             return IPProtoHeader.proto_dict.get(self.nh)
         return super().guess_payload_cls(ctx)
