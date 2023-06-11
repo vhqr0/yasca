@@ -7,11 +7,11 @@ from typing import Optional
 from typing_extensions import Self
 
 from .buffer import Buffer
-from .ip import IPProto, IPProtoHeader, ipproto_checksum
+from .ip import IPChecksumable, IPProto, IPProtoHeader
 from .packet import FieldConflictAct, PacketBuildCtx, PacketParseCtx
 
 
-class TCP(IPProtoHeader):
+class TCP(IPProtoHeader, IPChecksumable):
     src: int
     dst: int
     seqno: int
@@ -26,7 +26,6 @@ class TCP(IPProtoHeader):
     SYN: bool
     FIN: bool
     window: int
-    checksum: Optional[int]
     ptr: int
     opts: bytes
 
@@ -48,7 +47,6 @@ class TCP(IPProtoHeader):
         SYN: Optional[bool] = False,
         FIN: Optional[bool] = False,
         window: Optional[int] = 65535,
-        checksum: Optional[int] = None,
         ptr: Optional[int] = 0,
         opts: Optional[bytes] = b'',
         **kwargs,
@@ -98,7 +96,6 @@ class TCP(IPProtoHeader):
         self.SYN = SYN
         self.FIN = FIN
         self.window = window
-        self.checksum = checksum
         self.ptr = ptr
         self.opts = opts
 
@@ -114,7 +111,7 @@ class TCP(IPProtoHeader):
             return
         raise RuntimeError
 
-    def build(self, ctx: PacketBuildCtx) -> bytes:
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
         self.resolve_opts(ctx)
         div, mod = divmod(len(self.opts), 4)
         if mod != 0:
@@ -123,7 +120,6 @@ class TCP(IPProtoHeader):
         self.offset = ctx.conflict_act.resolve(self.offset, offset)
         assert isinstance(self.offset, int)
 
-        payload = self.build_payload(ctx)
         i = (self.offset << 12) + \
             (int(self.CWR) << 7) + \
             (int(self.ECE) << 6) + \
@@ -142,21 +138,19 @@ class TCP(IPProtoHeader):
         post_checksum = self.ptr.to_bytes(2, 'big') + \
             self.opts + \
             payload
-
-        if self.checksum is not None and \
-           ctx.conflict_act is FieldConflictAct.Override:
-            return pre_checksum + \
-                self.checksum.to_bytes(2, 'big') + \
-                post_checksum
-
-        buf = pre_checksum + b'\x00\x00' + post_checksum
-        checksum = ipproto_checksum(buf, ctx.ip_src, ctx.ip_dst, self.proto)
-        self.checksum = ctx.conflict_act.resolve(self.checksum, checksum)
-        assert isinstance(self.checksum, int)
-        return pre_checksum + self.checksum.to_bytes(2, 'big') + post_checksum
+        return self.ipproto_checksum_resolve_and_build(
+            pre_checksum,
+            post_checksum,
+            self.proto,
+            ctx,
+        )
 
     @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+    def parse_header_from_buffer(
+        cls,
+        buffer: Buffer,
+        ctx: PacketParseCtx,
+    ) -> Self:
         src = buffer.pop_int(2)
         dst = buffer.pop_int(2)
         seqno = buffer.pop_int(4)
@@ -177,7 +171,7 @@ class TCP(IPProtoHeader):
         if offset < 5:
             raise RuntimeError
         opts = buffer.pop((offset - 5) * 4)
-        packet = cls(
+        return cls(
             src=src,
             dst=dst,
             seqno=seqno,
@@ -196,5 +190,3 @@ class TCP(IPProtoHeader):
             ptr=ptr,
             opts=opts,
         )
-        packet.parse_payload_from_buffer(buffer, ctx)
-        return packet

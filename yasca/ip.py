@@ -4,7 +4,7 @@ from typing import Optional, Union
 from .addr import IPAddress
 from .buffer import Buffer
 from .enums import U8Enum
-from .packet import Packet, PacketBuildCtx, PacketParseCtx
+from .packet import FieldConflictAct, Packet, PacketBuildCtx, PacketParseCtx
 
 
 class IPVersion(U8Enum):
@@ -68,34 +68,78 @@ class IPChainedHeader(Packet):
         return super().guess_payload_cls(ctx)
 
 
-def ip_sum(buf: bytes) -> int:
-    s = 0
-    buffer = Buffer(buf)
-    while len(buffer) >= 2:
-        s += buffer.pop_int(2)
-    if len(buffer) == 1:
-        s += buffer.pop_int(1) << 8
-    s = ((s & 0xffff0000) >> 16) + (s & 0xffff)
-    s = ((s & 0xffff0000) >> 16) + (s & 0xffff)
-    s &= 0xffff
-    return s
+class IPChecksumable(Packet):
+    checksum: Optional[int]
 
+    def __init__(self, checksum: Optional[int] = None, **kwargs):
+        super().__init__(**kwargs)
+        self.checksum = checksum
 
-def ip_checksum(buf: bytes) -> int:
-    s = ip_sum(buf)
-    s = c_ushort(-s - 1).value  # invert
-    return s
+    @classmethod
+    def ip_sum(cls, buf: bytes) -> int:
+        s = 0
+        buffer = Buffer(buf)
+        while len(buffer) >= 2:
+            s += buffer.pop_int(2)
+        if len(buffer) == 1:
+            s += buffer.pop_int(1) << 8
+        s = ((s & 0xffff0000) >> 16) + (s & 0xffff)
+        s = ((s & 0xffff0000) >> 16) + (s & 0xffff)
+        s &= 0xffff
+        return s
 
+    @classmethod
+    def ip_checksum(cls, buf: bytes) -> int:
+        s = cls.ip_sum(buf)
+        s = c_ushort(-s - 1).value  # invert
+        return s
 
-def ipproto_checksum(
-    buf: bytes,
-    src: IPAddress,
-    dst: IPAddress,
-    proto: _IPProto,
-) -> int:
-    buf = bytes(src) + \
-        bytes(dst) + \
-        len(buf).to_bytes(4, 'big') + \
-        proto.to_bytes(4, 'big') + \
-        buf
-    return ip_checksum(buf)
+    @classmethod
+    def ipproto_checksum(
+        cls,
+        buf: bytes,
+        src: IPAddress,
+        dst: IPAddress,
+        proto: _IPProto,
+    ) -> int:
+        buf = bytes(src) + \
+            bytes(dst) + \
+            len(buf).to_bytes(4, 'big') + \
+            proto.to_bytes(4, 'big') + \
+            buf
+        return cls.ip_checksum(buf)
+
+    def ip_checksum_resolve_and_build(
+        self,
+        pre_checksum: bytes,
+        post_checksum: bytes,
+        ctx: PacketBuildCtx,
+    ) -> bytes:
+        if self.checksum is not None and \
+           ctx.conflict_act is FieldConflictAct.Override:
+            return pre_checksum + \
+                self.checksum.to_bytes(2, 'big') + \
+                post_checksum
+        buf = pre_checksum + bytes(2) + post_checksum
+        checksum = self.ip_checksum(buf)
+        self.checksum = ctx.conflict_act.resolve(self.checksum, checksum)
+        assert isinstance(self.checksum, int)
+        return pre_checksum + self.checksum.to_bytes(2, 'big') + buf[4:]
+
+    def ipproto_checksum_resolve_and_build(
+        self,
+        pre_checksum: bytes,
+        post_checksum: bytes,
+        proto: _IPProto,
+        ctx: PacketBuildCtx,
+    ) -> bytes:
+        if self.checksum is not None and \
+           ctx.conflict_act is FieldConflictAct.Override:
+            return pre_checksum + \
+                self.checksum.to_bytes(2, 'big') + \
+                post_checksum
+        buf = pre_checksum + bytes(2) + post_checksum
+        checksum = self.ipproto_checksum(buf, ctx.ip_src, ctx.ip_dst, proto)
+        self.checksum = ctx.conflict_act.resolve(self.checksum, checksum)
+        assert isinstance(self.checksum, int)
+        return pre_checksum + self.checksum.to_bytes(2, 'big') + buf[4:]

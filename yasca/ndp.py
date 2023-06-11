@@ -10,7 +10,7 @@ from .addr import IPv6Address, MACAddress
 from .buffer import Buffer
 from .enums import U8Enum
 from .icmpv6 import ICMPv6, ICMPv6Type
-from .packet import PacketBuildCtx, PacketParseCtx, Packet
+from .packet import Packet, PacketBuildCtx, PacketParseCtx
 
 
 class ICMPv6NDOptType(U8Enum):

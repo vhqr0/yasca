@@ -8,9 +8,9 @@ from typing_extensions import Self
 
 from .buffer import Buffer
 from .enums import U8Enum
-from .ip import IPProto, IPProtoHeader, ipproto_checksum
+from .ip import IPChecksumable, IPProto, IPProtoHeader
 from .ipv6 import IPv6Error
-from .packet import FieldConflictAct, Packet, PacketBuildCtx, PacketParseCtx
+from .packet import Packet, PacketBuildCtx, PacketParseCtx
 
 
 class ICMPv6Type(U8Enum):
@@ -51,26 +51,19 @@ class ICMPv6ParameterProblemCode(U8Enum):
 _ICMPv6Type = Union[ICMPv6Type, int]
 
 
-class ICMPv6(IPProtoHeader):
+class ICMPv6(IPProtoHeader, IPChecksumable):
     msg_dict: dict[int, type['ICMPv6']] = dict()
 
     type: _ICMPv6Type
     code: int
-    checksum: Optional[int]
 
     proto = IPProto.ICMPv6
 
-    def __init__(
-        self,
-        code: Optional[int] = 0,
-        checksum: Optional[int] = None,
-        **kwargs,
-    ):
+    def __init__(self, code: Optional[int] = 0, **kwargs):
         super().__init__(**kwargs)
         if code is None:
             code = 0
         self.code = code
-        self.checksum = checksum
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -82,18 +75,12 @@ class ICMPv6(IPProtoHeader):
         pre_checksum = ICMPv6Type.int2bytes(self.type) + \
             self.code.to_bytes(1, 'big')
         post_checksum = msg + payload
-
-        if self.checksum is not None and \
-           ctx.conflict_act is FieldConflictAct.Override:
-            return pre_checksum + \
-                self.checksum.to_bytes(2, 'big') + \
-                post_checksum
-
-        buf = pre_checksum + b'\x00\x00' + post_checksum
-        checksum = ipproto_checksum(buf, ctx.ip_src, ctx.ip_dst, self.proto)
-        self.checksum = ctx.conflict_act.resolve(self.checksum, checksum)
-        assert isinstance(self.checksum, int)
-        return pre_checksum + self.checksum.to_bytes(2, 'big') + post_checksum
+        return self.ipproto_checksum_resolve_and_build(
+            pre_checksum,
+            post_checksum,
+            self.proto,
+            ctx,
+        )
 
     def build_msg(self, ctx: PacketBuildCtx) -> bytes:
         raise NotImplementedError

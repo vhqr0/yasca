@@ -9,7 +9,7 @@ from typing_extensions import Self
 from .addr import IPv4Address
 from .buffer import Buffer
 from .ether import EtherProto, EtherProtoHeader
-from .ip import IPChainedHeader, IPProto, IPVersion, ip_checksum
+from .ip import IPChainedHeader, IPChecksumable, IPProto, IPVersion
 from .packet import FieldConflictAct, PacketBuildCtx, PacketParseCtx
 
 _IPv4Address = Union[IPv4Address, str, int, bytes]
@@ -17,7 +17,7 @@ _IPVersion = Union[IPVersion, int]
 _IPProto = Union[IPProto, int]
 
 
-class IPv4(EtherProtoHeader, IPChainedHeader):
+class IPv4(EtherProtoHeader, IPChainedHeader, IPChecksumable):
     ver: _IPVersion
     ihl: Optional[int]
     tos: int
@@ -27,7 +27,6 @@ class IPv4(EtherProtoHeader, IPChainedHeader):
     MF: bool
     offset: int
     ttl: int
-    checksum: Optional[int]
     src: IPv4Address
     dst: IPv4Address
     opts: bytes
@@ -45,7 +44,6 @@ class IPv4(EtherProtoHeader, IPChainedHeader):
         MF: Optional[bool] = False,
         offset: Optional[int] = 0,
         ttl: Optional[int] = 64,
-        checksum: Optional[int] = None,
         src: Optional[_IPv4Address] = None,
         dst: Optional[_IPv4Address] = None,
         opts: Optional[bytes] = b'',
@@ -81,7 +79,6 @@ class IPv4(EtherProtoHeader, IPChainedHeader):
         self.MF = MF
         self.offset = offset
         self.ttl = ttl
-        self.checksum = checksum
         self.src = src
         self.dst = dst
         self.opts = opts
@@ -147,18 +144,11 @@ class IPv4(EtherProtoHeader, IPChainedHeader):
             bytes(self.dst) + \
             self.opts + \
             payload
-
-        if self.checksum is not None and \
-           ctx.conflict_act is FieldConflictAct.Override:
-            return pre_checksum + \
-                self.checksum.to_bytes(2, 'big') + \
-                post_checksum
-
-        buf = pre_checksum + b'\x00\x00' + post_checksum
-        checksum = ip_checksum(buf)
-        self.checksum = ctx.conflict_act.resolve(self.checksum, checksum)
-        assert isinstance(self.checksum, int)
-        return pre_checksum + self.checksum.to_bytes(2, 'big') + buf[4:]
+        return self.ip_checksum_resolve_and_build(
+            pre_checksum,
+            post_checksum,
+            ctx,
+        )
 
     @classmethod
     def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:

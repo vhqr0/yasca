@@ -9,9 +9,9 @@ from typing_extensions import Self
 from .addr import IPv4Address
 from .buffer import Buffer
 from .enums import U8Enum
-from .ip import IPProto, IPProtoHeader, ip_checksum
+from .ip import IPChecksumable, IPProto, IPProtoHeader
 from .ipv4 import IPv4Error
-from .packet import FieldConflictAct, Packet, PacketBuildCtx, PacketParseCtx
+from .packet import Packet, PacketBuildCtx, PacketParseCtx
 
 
 class ICMPv4Type(U8Enum):
@@ -53,57 +53,41 @@ _IPv4Address = Union[IPv4Address, str, int, bytes]
 _ICMPv4Type = Union[ICMPv4Type, int]
 
 
-class ICMPv4(IPProtoHeader):
+class ICMPv4(IPProtoHeader, IPChecksumable):
     msg_dict: dict[int, type['ICMPv4']] = dict()
 
     type: _ICMPv4Type
     code: int
-    checksum: Optional[int]
 
     proto = IPProto.ICMPv4
 
-    def __init__(
-        self,
-        code: Optional[int] = 0,
-        checksum: Optional[int] = None,
-        **kwargs,
-    ):
+    def __init__(self, code: Optional[int] = 0, **kwargs):
         super().__init__(**kwargs)
         if code is None:
             code = 0
         self.code = code
-        self.checksum = checksum
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         if hasattr(cls, 'type') and cls.type not in cls.msg_dict:
             cls.msg_dict[cls.type] = cls
 
-    def build(self, ctx: PacketBuildCtx) -> bytes:
-        payload = self.build_payload(ctx)
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
         msg = self.build_msg(ctx)
-
         pre_checksum = ICMPv4Type.int2bytes(self.type) + \
             self.code.to_bytes(1, 'big')
         post_checksum = msg + payload
-
-        if self.checksum is not None and \
-           ctx.conflict_act is FieldConflictAct.Override:
-            return pre_checksum + \
-                self.checksum.to_bytes(2, 'big') + \
-                post_checksum
-
-        buf = pre_checksum + b'\x00\x00' + post_checksum
-        checksum = ip_checksum(buf)
-        self.checksum = ctx.conflict_act.resolve(self.checksum, checksum)
-        assert isinstance(self.checksum, int)
-        return pre_checksum + self.checksum.to_bytes(2, 'big') + post_checksum
+        return self.ip_checksum_resolve_and_build(
+            pre_checksum,
+            post_checksum,
+            ctx,
+        )
 
     def build_msg(self, ctx: PacketBuildCtx) -> bytes:
         raise NotImplementedError
 
     @classmethod
-    def parse_from_buffer(
+    def parse_header_from_buffer(
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
@@ -111,11 +95,9 @@ class ICMPv4(IPProtoHeader):
         type = ICMPv4Type.pop_from_buffer(buffer)
         code = buffer.pop_int(1)
         checksum = buffer.pop_int(2)
-        pcls = cls.msg_dict.get(type, ICMPv4Unknown)
         kwargs = {'code': code, 'checksum': checksum}
-        packet = pcls.parse_msg_from_buffer(type, buffer, kwargs, ctx)
-        packet.parse_payload_from_buffer(buffer, ctx)
-        return packet
+        pcls = cls.msg_dict.get(type, ICMPv4Unknown)
+        return pcls.parse_msg_from_buffer(type, buffer, kwargs, ctx)
 
     @classmethod
     def parse_msg_from_buffer(
@@ -143,11 +125,22 @@ class ICMPv4Unknown(ICMPv4):
     def build_msg(self, ctx: PacketBuildCtx) -> bytes:
         return b''
 
+    @classmethod
+    def parse_msg_from_buffer(
+        cls,
+        type: _ICMPv4Type,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        kwargs['type'] = type
+        return cls(**kwargs)
+
 
 class ICMPv4Error(ICMPv4):
 
     def build_msg(self, ctx: PacketBuildCtx) -> bytes:
-        return b'\x00\x00\x00\x00'
+        return bytes(4)
 
     @classmethod
     def parse_msg_from_buffer(

@@ -7,15 +7,14 @@ from typing import Optional
 from typing_extensions import Self
 
 from .buffer import Buffer
-from .ip import IPProto, IPProtoHeader, ipproto_checksum
-from .packet import FieldConflictAct, PacketBuildCtx, PacketParseCtx
+from .ip import IPChecksumable, IPProto, IPProtoHeader
+from .packet import PacketBuildCtx, PacketParseCtx
 
 
-class UDP(IPProtoHeader):
+class UDP(IPProtoHeader, IPChecksumable):
     src: int
     dst: int
     len: Optional[int]
-    checksum: Optional[int]
 
     proto = IPProto.UDP
 
@@ -24,7 +23,6 @@ class UDP(IPProtoHeader):
         src: Optional[int] = 0,
         dst: Optional[int] = 0,
         len: Optional[int] = None,
-        checksum: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -35,10 +33,8 @@ class UDP(IPProtoHeader):
         self.src = src
         self.dst = dst
         self.len = len
-        self.checksum = checksum
 
-    def build(self, ctx: PacketBuildCtx) -> bytes:
-        payload = self.build_payload(ctx)
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
         tlen = len(payload) + 8
         self.len = ctx.conflict_act.resolve(self.len, tlen)
         assert isinstance(self.len, int)
@@ -47,31 +43,24 @@ class UDP(IPProtoHeader):
             self.dst.to_bytes(2, 'big') + \
             self.len.to_bytes(2, 'big')
         post_checksum = payload
-
-        if self.checksum is not None and \
-           ctx.conflict_act is FieldConflictAct.Override:
-            return pre_checksum + \
-                self.checksum.to_bytes(2, 'big') + \
-                post_checksum
-
-        buf = pre_checksum + b'\x00\x00' + post_checksum
-        checksum = ipproto_checksum(buf, ctx.ip_src, ctx.ip_dst, self.proto)
-        self.checksum = ctx.conflict_act.resolve(self.checksum, checksum)
-        assert isinstance(self.checksum, int)
-        return pre_checksum + self.checksum.to_bytes(2, 'big') + post_checksum
+        return self.ipproto_checksum_resolve_and_build(
+            pre_checksum,
+            post_checksum,
+            self.proto,
+            ctx,
+        )
 
     @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+    def parse_header_from_buffer(
+        cls,
+        buffer: Buffer,
+        ctx: PacketParseCtx,
+    ) -> Self:
         src = buffer.pop_int(2)
         dst = buffer.pop_int(2)
         tlen = buffer.pop_int(2)
         checksum = buffer.pop_int(2)
-        packet = cls(
-            src=src,
-            dst=dst,
-            len=tlen,
-            checksum=checksum,
-        )
+
         plen = tlen - 8
         if plen < 0:
             raise RuntimeError
@@ -79,5 +68,10 @@ class UDP(IPProtoHeader):
             if plen > len(buffer):
                 raise RuntimeError
         buffer.narrow(plen)
-        packet.parse_payload_from_buffer(buffer, ctx)
-        return packet
+
+        return cls(
+            src=src,
+            dst=dst,
+            len=tlen,
+            checksum=checksum,
+        )
