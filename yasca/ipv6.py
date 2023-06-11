@@ -1,6 +1,7 @@
 """
 RFCs:
 - RFC8200: IPv6
+- RFC2675: IPv6 Opt Jumbo
 """
 from typing import Any, Optional, Union
 
@@ -16,8 +17,9 @@ from .packet import (FieldConflictAct, Packet, PacketBuildCtx, PacketParseCtx,
 
 
 class IPv6OptType(U8Enum):
-    Pad1 = 0
-    PadN = 1
+    Pad1 = 0x00
+    PadN = 0x01
+    Jumbo = 0xc2
 
 
 _IPv6Address = Union[IPv6Address, str, int, bytes]
@@ -280,6 +282,33 @@ class IPv6OptPadN(IPv6Opt):
     ) -> Self:
         n = len(buffer.pop_all()) + 2
         kwargs['n'] = n
+        return cls(**kwargs)
+
+
+class IPv6OptJumbo(IPv6Opt):
+    plen: int
+
+    type = IPv6OptType.Jumbo
+
+    def __init__(self, plen: Optional[int] = 0, **kwargs):
+        super().__init__(**kwargs)
+        if plen is None:
+            plen = 0
+        self.plen = plen
+
+    def build_opt(self, ctx: PacketBuildCtx) -> bytes:
+        return self.plen.to_bytes(4, 'big')
+
+    @classmethod
+    def parse_opt_from_buffer(
+        cls,
+        type: _IPv6OptType,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        plen = buffer.pop_int(4)
+        kwargs['plen'] = plen
         return cls(**kwargs)
 
 
