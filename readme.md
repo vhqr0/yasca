@@ -39,8 +39,7 @@ TODO
 Higher priority first:
 
 
-1. Rewrite IPv4 Options as Packet
-2. IGMP/MLD
-3. UDP upper layer protocol
-4. DNS/mDNS/LLMNR
-5. DHCPv4/DHCPv6
+1. IGMP/MLD
+2. UDP upper layer protocol
+3. DNS/mDNS/LLMNR
+4. DHCPv4/DHCPv6
