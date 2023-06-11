@@ -2,7 +2,6 @@
 RFCs:
 - RFC4861: NDP
 """
-from collections.abc import Iterator
 from typing import Any, Optional, Union
 
 from typing_extensions import Self
@@ -11,7 +10,7 @@ from .addr import IPv6Address, MACAddress
 from .buffer import Buffer
 from .enums import U8Enum
 from .icmpv6 import ICMPv6, ICMPv6Type
-from .packet import PacketBuildCtx, PacketParseCtx
+from .packet import PacketBuildCtx, PacketParseCtx, Packet
 
 
 class ICMPv6NDOptType(U8Enum):
@@ -28,7 +27,224 @@ _ICMPv6Type = Union[ICMPv6Type, int]
 _ICMPv6NDOptType = Union[ICMPv6NDOptType, int]
 
 
-class ICMPv6NDOpt:
+class ICMPv6ND(ICMPv6):
+
+    def build_msg(self, ctx: PacketBuildCtx) -> bytes:
+        return bytes(4)
+
+    @classmethod
+    def parse_msg_from_buffer(
+        cls,
+        type: _ICMPv6Type,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        buffer.pop(4)
+        return cls(**kwargs)
+
+    def guess_payload_cls(self, ctx: PacketParseCtx) -> Optional[type[Packet]]:
+        return ICMPv6NDOpt
+
+
+class ICMPv6ND_RS(ICMPv6ND):
+    type = ICMPv6Type.ND_RS
+
+
+class ICMPv6ND_RA(ICMPv6ND):
+    hlim: int
+    M: bool
+    O: bool
+    lifetime: int
+    reachable_time: int
+    retrans_timer: int
+
+    type = ICMPv6Type.ND_RA
+
+    def __init__(
+        self,
+        hlim: Optional[int] = 255,
+        M: Optional[bool] = True,
+        O: Optional[bool] = True,  # noqa
+        lifetime: Optional[int] = 7200,
+        reachable_time: Optional[int] = 0,
+        retrans_timer: Optional[int] = 0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if hlim is None:
+            hlim = 255
+        if M is None:
+            M = True
+        if O is None:
+            O = True  # noqa
+        if lifetime is None:
+            lifetime = 7200
+        if reachable_time is None:
+            reachable_time = 0
+        if retrans_timer is None:
+            retrans_timer = 0
+
+    def build_msg(self, ctx: PacketBuildCtx) -> bytes:
+        return self.hlim.to_bytes(1, 'big') + \
+            ((int(self.M) << 7) + (int(self.O) << 6)).to_bytes(1, 'big') + \
+            self.lifetime.to_bytes(2, 'big') + \
+            self.reachable_time.to_bytes(4, 'big') + \
+            self.retrans_timer.to_bytes(4, 'big')
+
+    @classmethod
+    def parse_msg_from_buffer(
+        cls,
+        type: _ICMPv6Type,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        hlim = buffer.pop_int(1)
+        i = buffer.pop_int(1)
+        M = bool((i >> 7) & 1)
+        O = bool((i >> 6) & 1)  # noqa
+        lifetime = buffer.pop_int(2)
+        reachable_time = buffer.pop_int(4)
+        retrans_timer = buffer.pop_int(4)
+        kwargs['hlim'] = hlim
+        kwargs['M'] = M
+        kwargs['O'] = O
+        kwargs['lifetime'] = lifetime
+        kwargs['reachable_time'] = reachable_time
+        kwargs['retrans_timer'] = retrans_timer
+        return cls(**kwargs)
+
+
+class ICMPv6ND_NS(ICMPv6ND):
+    target: IPv6Address
+
+    type = ICMPv6Type.ND_NS
+
+    def __init__(self, target: Optional[_IPv6Address] = None, **kwargs):
+        super().__init__(**kwargs)
+        if not isinstance(target, IPv6Address):
+            target = IPv6Address(target)
+        self.target = target
+
+    def build_msg(self, ctx: PacketBuildCtx) -> bytes:
+        return bytes(4) + bytes(self.target)
+
+    @classmethod
+    def parse_msg_from_buffer(
+        cls,
+        type: _ICMPv6Type,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        buffer.pop(4)
+        target = IPv6Address.pop_from_buffer(buffer)
+        kwargs['target'] = target
+        return cls(**kwargs)
+
+
+class ICMPv6ND_NA(ICMPv6ND):
+    R: bool
+    S: bool
+    O: bool
+    target: IPv6Address
+
+    type = ICMPv6Type.ND_NA
+
+    def __init__(
+        self,
+        R: Optional[bool] = True,
+        S: Optional[bool] = True,
+        O: Optional[bool] = True,  # noqa
+        target: Optional[_IPv6Address] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if R is None:
+            R = True
+        if S is None:
+            S = True
+        if O is None:
+            O = True  # noqa
+        if not isinstance(target, IPv6Address):
+            target = IPv6Address(target)
+        self.R = R
+        self.S = S
+        self.O = O  # noqa
+        self.target = target
+
+    def build_msg(self, ctx: PacketBuildCtx) -> bytes:
+        i = (int(self.R) << 7) + \
+            (int(self.S) << 6) + \
+            (int(self.O) << 5)
+        return i.to_bytes(1, 'big') + \
+            bytes(3) + \
+            bytes(self.target)
+
+    @classmethod
+    def parse_msg_from_buffer(
+        cls,
+        type: _ICMPv6Type,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        i = buffer.pop_int(1)
+        R = bool((i >> 7) & 1)
+        S = bool((i >> 6) & 1)
+        O = bool((i >> 5) & 1)  # noqa
+        buffer.pop(3)
+        target = IPv6Address.pop_from_buffer(buffer)
+        kwargs['R'] = R
+        kwargs['S'] = S
+        kwargs['O'] = O
+        kwargs['target'] = target
+        return cls(**kwargs)
+
+
+class ICMPv6ND_RM(ICMPv6ND):
+    target: IPv6Address
+    dest: IPv6Address
+
+    type = ICMPv6Type.ND_RM
+
+    def __init__(
+        self,
+        target: Optional[_IPv6Address] = None,
+        dest: Optional[_IPv6Address] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if not isinstance(target, IPv6Address):
+            target = IPv6Address(target)
+        if not isinstance(dest, IPv6Address):
+            dest = IPv6Address(dest)
+        self.target = target
+        self.dest = dest
+
+    def build_msg(self, ctx: PacketBuildCtx) -> bytes:
+        return bytes(4) + \
+            bytes(self.target) + \
+            bytes(self.dest)
+
+    @classmethod
+    def parse_msg_from_buffer(
+        cls,
+        type: _ICMPv6Type,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        buffer.pop(4)
+        target = IPv6Address.pop_from_buffer(buffer)
+        dest = IPv6Address.pop_from_buffer(buffer)
+        kwargs['target'] = target
+        kwargs['dest'] = dest
+        return cls(**kwargs)
+
+
+class ICMPv6NDOpt(Packet):
     opt_dict: dict[int, type['ICMPv6NDOpt']] = dict()
 
     type: _ICMPv6NDOptType
@@ -43,18 +259,19 @@ class ICMPv6NDOpt:
         if hasattr(cls, 'type') and cls.type not in cls.opt_dict:
             cls.opt_dict[cls.type] = cls
 
-    def build(self, ctx: PacketBuildCtx) -> bytes:
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
         opt = self.build_opt(ctx)
         div, mod = divmod(len(opt) + 2, 8)
         if mod != 0:
             div += 1
             opt += bytes(8 - mod)
-        olen = div
-        self.len = ctx.conflict_act.resolve(self.len, olen)
+        _len = div
+        self.len = ctx.conflict_act.resolve(self.len, _len)
         assert isinstance(self.len, int)
         return ICMPv6NDOptType.int2bytes(self.type) + \
             self.len.to_bytes(1, 'big') + \
-            opt
+            opt + \
+            payload
 
     def build_opt(self, ctx: PacketBuildCtx) -> bytes:
         raise NotImplementedError
@@ -69,10 +286,10 @@ class ICMPv6NDOpt:
         len = buffer.pop_int(1) * 8 - 2
         if len < 0:
             raise RuntimeError
-        obuffer = Buffer(buffer.pop(len))
-        ocls = cls.opt_dict.get(type, ICMPv6NDOptUnknown)
+        opt = buffer.pop(len)
         kwargs = {'len': len}
-        return ocls.parse_opt_from_buffer(type, obuffer, kwargs, ctx)
+        pcls = cls.opt_dict.get(type, ICMPv6NDOptUnknown)
+        return pcls.parse_opt_from_buffer(type, Buffer(opt), kwargs, ctx)
 
     @classmethod
     def parse_opt_from_buffer(
@@ -83,15 +300,6 @@ class ICMPv6NDOpt:
         ctx: PacketParseCtx,
     ) -> Self:
         raise NotImplementedError
-
-    def __repr__(self) -> str:
-        fields = self.get_fields()
-        r = ','.join('{}={}'.format(f, repr(getattr(self, f))) for f in fields)
-        return '{}({})'.format(self.__class__.__name__, r)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        return ['len']
 
 
 class ICMPv6NDOptUnknown(ICMPv6NDOpt):
@@ -127,12 +335,6 @@ class ICMPv6NDOptUnknown(ICMPv6NDOpt):
         kwargs['data'] = data
         return cls(**kwargs)
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['type', 'data']
-        return fields
-
 
 class ICMPv6NDOptLinkLayerAddress(ICMPv6NDOpt):
     addr: MACAddress
@@ -157,12 +359,6 @@ class ICMPv6NDOptLinkLayerAddress(ICMPv6NDOpt):
         addr = MACAddress.pop_from_buffer(buffer)
         kwargs['addr'] = addr
         return cls(**kwargs)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('addr')
-        return fields
 
 
 class ICMPv6NDOptSourceLinkLayerAddress(ICMPv6NDOptLinkLayerAddress):
@@ -245,19 +441,6 @@ class ICMPv6NDOptPrefixInformation(ICMPv6NDOpt):
         kwargs['prefix'] = prefix
         return cls(**kwargs)
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += [
-            'plen',
-            'L',
-            'A',
-            'valid_lifetime',
-            'prefered_lifetime',
-            'prefix',
-        ]
-        return fields
-
 
 class ICMPv6NDOptRedirectedHeader(ICMPv6NDOpt):
     data: bytes
@@ -286,12 +469,6 @@ class ICMPv6NDOptRedirectedHeader(ICMPv6NDOpt):
         kwargs['data'] = data
         return cls(**kwargs)
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('data')
-        return fields
-
 
 class ICMPv6NDOptMTU(ICMPv6NDOpt):
     mtu: int
@@ -318,303 +495,4 @@ class ICMPv6NDOptMTU(ICMPv6NDOpt):
         buffer.pop(2)
         mtu = buffer.pop_int(4)
         kwargs['mtu'] = mtu
-        return cls(**kwargs)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('mtu')
-        return fields
-
-
-class ICMPv6NDOptList:
-    opts: list[ICMPv6NDOpt]
-
-    def __init__(
-        self,
-        opts: Optional[Union[ICMPv6NDOpt, list[ICMPv6NDOpt]]] = None,
-    ):
-        if opts is None:
-            opts = list()
-        if isinstance(opts, ICMPv6NDOpt):
-            opts = [opts]
-        self.opts = opts
-
-    def __iter__(self) -> Iterator[ICMPv6NDOpt]:
-        return iter(self.opts)
-
-    def __len__(self) -> int:
-        return len(self.opts)
-
-    def get(self, key: type[ICMPv6NDOpt]) -> Optional[ICMPv6NDOpt]:
-        for opt in self:
-            if isinstance(opt, key):
-                return opt
-        return None
-
-    def __contains__(self, key: type[ICMPv6NDOpt]) -> bool:
-        o = self.get(key)
-        return o is not None
-
-    def __getitem__(self, key: type[ICMPv6NDOpt]) -> ICMPv6NDOpt:
-        o = self.get(key)
-        if o is None:
-            raise KeyError
-        return o
-
-    def append(self, opt: ICMPv6NDOpt):
-        self.opts.append(opt)
-
-    def build(self, ctx: PacketBuildCtx) -> bytes:
-        buf = b''.join(opt.build(ctx) for opt in self)
-        return buf
-
-    @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
-        opts = list()
-        while not buffer.empty():
-            opts.append(ICMPv6NDOpt.parse_from_buffer(buffer, ctx))
-        return cls(opts)
-
-    def __repr__(self) -> str:
-        r = ','.join(repr(opt) for opt in self)
-        return '{}({})'.format(self.__class__.__name__, r)
-
-
-class ICMPv6ND(ICMPv6):
-    opts: ICMPv6NDOptList
-
-    def __init__(
-        self,
-        opts: Optional[Union[ICMPv6NDOptList, ICMPv6NDOpt,
-                             list[ICMPv6NDOpt]]] = None,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        if not isinstance(opts, ICMPv6NDOptList):
-            opts = ICMPv6NDOptList(opts)
-        self.opts = opts
-
-    def build_msg(self, ctx: PacketBuildCtx) -> bytes:
-        return bytes(4) + self.opts.build(ctx)
-
-    @classmethod
-    def parse_msg_from_buffer(
-        cls,
-        type: _ICMPv6Type,
-        buffer: Buffer,
-        kwargs: dict[str, Any],
-        ctx: PacketParseCtx,
-    ) -> Self:
-        buffer.pop(4)
-        opts = ICMPv6NDOptList.parse_from_buffer(buffer, ctx)
-        kwargs['opts'] = opts
-        return cls(**kwargs)
-
-
-class ICMPv6ND_RS(ICMPv6ND):
-    type = ICMPv6Type.ND_RS
-
-
-class ICMPv6ND_RA(ICMPv6ND):
-    hlim: int
-    M: bool
-    O: bool
-    lifetime: int
-    reachable_time: int
-    retrans_timer: int
-
-    type = ICMPv6Type.ND_RA
-
-    def __init__(
-        self,
-        hlim: Optional[int] = 255,
-        M: Optional[bool] = True,
-        O: Optional[bool] = True,  # noqa
-        lifetime: Optional[int] = 7200,
-        reachable_time: Optional[int] = 0,
-        retrans_timer: Optional[int] = 0,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        if hlim is None:
-            hlim = 255
-        if M is None:
-            M = True
-        if O is None:
-            O = True  # noqa
-        if lifetime is None:
-            lifetime = 7200
-        if reachable_time is None:
-            reachable_time = 0
-        if retrans_timer is None:
-            retrans_timer = 0
-
-    def build_msg(self, ctx: PacketBuildCtx) -> bytes:
-        return self.hlim.to_bytes(1, 'big') + \
-            ((int(self.M) << 7) + (int(self.O) << 6)).to_bytes(1, 'big') + \
-            self.lifetime.to_bytes(2, 'big') + \
-            self.reachable_time.to_bytes(4, 'big') + \
-            self.retrans_timer.to_bytes(4, 'big') + \
-            self.opts.build(ctx)
-
-    @classmethod
-    def parse_msg_from_buffer(
-        cls,
-        type: _ICMPv6Type,
-        buffer: Buffer,
-        kwargs: dict[str, Any],
-        ctx: PacketParseCtx,
-    ) -> Self:
-        hlim = buffer.pop_int(1)
-        i = buffer.pop_int(1)
-        M = bool((i >> 7) & 1)
-        O = bool((i >> 6) & 1)  # noqa
-        lifetime = buffer.pop_int(2)
-        reachable_time = buffer.pop_int(4)
-        retrans_timer = buffer.pop_int(4)
-        opts = ICMPv6NDOptList.parse_from_buffer(buffer, ctx)
-        kwargs['hlim'] = hlim
-        kwargs['M'] = M
-        kwargs['O'] = O
-        kwargs['lifetime'] = lifetime
-        kwargs['reachable_time'] = reachable_time
-        kwargs['retrans_timer'] = retrans_timer
-        kwargs['opts'] = opts
-        return cls(**kwargs)
-
-
-class ICMPv6ND_NS(ICMPv6ND):
-    target: IPv6Address
-
-    type = ICMPv6Type.ND_NS
-
-    def __init__(self, target: Optional[_IPv6Address] = None, **kwargs):
-        super().__init__(**kwargs)
-        if not isinstance(target, IPv6Address):
-            target = IPv6Address(target)
-        self.target = target
-
-    def build_msg(self, ctx: PacketBuildCtx) -> bytes:
-        return bytes(4) + bytes(self.target) + self.opts.build(ctx)
-
-    @classmethod
-    def parse_msg_from_buffer(
-        cls,
-        type: _ICMPv6Type,
-        buffer: Buffer,
-        kwargs: dict[str, Any],
-        ctx: PacketParseCtx,
-    ) -> Self:
-        buffer.pop(4)
-        target = IPv6Address.pop_from_buffer(buffer)
-        opts = ICMPv6NDOptList.parse_from_buffer(buffer, ctx)
-        kwargs['target'] = target
-        kwargs['opts'] = opts
-        return cls(**kwargs)
-
-
-class ICMPv6ND_NA(ICMPv6ND):
-    R: bool
-    S: bool
-    O: bool
-    target: IPv6Address
-
-    type = ICMPv6Type.ND_NA
-
-    def __init__(
-        self,
-        R: Optional[bool] = True,
-        S: Optional[bool] = True,
-        O: Optional[bool] = True,  # noqa
-        target: Optional[_IPv6Address] = None,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        if R is None:
-            R = True
-        if S is None:
-            S = True
-        if O is None:
-            O = True  # noqa
-        if not isinstance(target, IPv6Address):
-            target = IPv6Address(target)
-        self.R = R
-        self.S = S
-        self.O = O  # noqa
-        self.target = target
-
-    def build_msg(self, ctx: PacketBuildCtx) -> bytes:
-        i = (int(self.R) << 7) + \
-            (int(self.S) << 6) + \
-            (int(self.O) << 5)
-        return i.to_bytes(1, 'big') + \
-            bytes(3) + \
-            bytes(self.target) + \
-            self.opts.build(ctx)
-
-    @classmethod
-    def parse_msg_from_buffer(
-        cls,
-        type: _ICMPv6Type,
-        buffer: Buffer,
-        kwargs: dict[str, Any],
-        ctx: PacketParseCtx,
-    ) -> Self:
-        i = buffer.pop_int(1)
-        R = bool((i >> 7) & 1)
-        S = bool((i >> 6) & 1)
-        O = bool((i >> 5) & 1)  # noqa
-        buffer.pop(3)
-        target = IPv6Address.pop_from_buffer(buffer)
-        opts = ICMPv6NDOptList.parse_from_buffer(buffer, ctx)
-        kwargs['R'] = R
-        kwargs['S'] = S
-        kwargs['O'] = O
-        kwargs['target'] = target
-        kwargs['opts'] = opts
-        return cls(**kwargs)
-
-
-class ICMPv6ND_RM(ICMPv6ND):
-    target: IPv6Address
-    dest: IPv6Address
-
-    type = ICMPv6Type.ND_RM
-
-    def __init__(
-        self,
-        target: Optional[_IPv6Address] = None,
-        dest: Optional[_IPv6Address] = None,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        if not isinstance(target, IPv6Address):
-            target = IPv6Address(target)
-        if not isinstance(dest, IPv6Address):
-            dest = IPv6Address(dest)
-        self.target = target
-        self.dest = dest
-
-    def build_msg(self, ctx: PacketBuildCtx) -> bytes:
-        return bytes(4) + \
-            bytes(self.target) + \
-            bytes(self.dest) + \
-            self.opts.build(ctx)
-
-    @classmethod
-    def parse_msg_from_buffer(
-        cls,
-        type: _ICMPv6Type,
-        buffer: Buffer,
-        kwargs: dict[str, Any],
-        ctx: PacketParseCtx,
-    ) -> Self:
-        buffer.pop(4)
-        target = IPv6Address.pop_from_buffer(buffer)
-        dest = IPv6Address.pop_from_buffer(buffer)
-        opts = ICMPv6NDOptList.parse_from_buffer(buffer, ctx)
-        kwargs['target'] = target
-        kwargs['dest'] = dest
-        kwargs['opts'] = opts
         return cls(**kwargs)
