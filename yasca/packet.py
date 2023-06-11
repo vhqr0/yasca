@@ -195,12 +195,17 @@ class Packet:
 
     def __repr__(self) -> str:
         fields = self.get_fields()
-        r = '\n'.join('  {}={},'.format(f, repr(getattr(self, f)))
-                      for f in fields if hasattr(self, f))
-        r = '{}(\n{}\n)'.format(self.__class__.__name__, r)
+        r = ','.join('{}={}'.format(f, repr(getattr(self, f))) for f in fields
+                     if hasattr(self, f))
+        r = '{}({})'.format(self.__class__.__name__, r)
         if self.payload is None:
             return r
         return '{}/{}'.format(r, repr(self.payload))
+
+    def yapf(self):
+        from yapf.yapflib.yapf_api import FormatCode
+        code, _ = FormatCode(repr(self))
+        print(code)
 
     @classmethod
     def get_fields(cls) -> list[str]:
