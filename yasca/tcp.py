@@ -1,6 +1,8 @@
 """
 RFCs:
 - RFC9293: TCP
+- RFC7323: TCP Opt WS, TS
+- RFC2018, RFC2883: TCP Opt SACK
 """
 from typing import Any, Optional, Union
 
@@ -13,9 +15,13 @@ from .packet import Packet, PacketBuildCtx, PacketParseCtx, Payload
 
 
 class TCPOptType(U8Enum):
-    EndOfOptionList = 0
-    NoOperation = 1
-    MaximumSegmentSize = 2
+    EOL = 0
+    NOP = 1
+    MSS = 2
+    WS = 3
+    TS = 8
+    SACKOK = 4
+    SACK = 5
 
 
 _TCPOptType = Union[TCPOptType, int]
@@ -37,8 +43,8 @@ class TCPOpt(Packet):
             cls.opt_dict[cls.type] = cls
 
     def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
-        if isinstance(self, TCPOptEndOfOptionList) or \
-           isinstance(self, TCPOptNoOperation):
+        if isinstance(self, TCPOptEOL) or \
+           isinstance(self, TCPOptNOP):
             return TCPOptType.int2bytes(self.type)
 
         opt = self.build_opt(ctx)
@@ -52,7 +58,7 @@ class TCPOpt(Packet):
             payload
 
     def build_opt(self, ctx: PacketBuildCtx) -> bytes:
-        raise NotImplementedError
+        return b''
 
     @classmethod
     def parse_header_from_buffer(
@@ -61,11 +67,11 @@ class TCPOpt(Packet):
         ctx: PacketParseCtx,
     ) -> Packet:
         type = TCPOptType.pop_from_buffer(buffer)
-        if type is TCPOptType.EndOfOptionList:
+        if type is TCPOptType.EOL:
             buffer.pop_all()
-            return TCPOptEndOfOptionList(len=1)
-        if type is TCPOptType.NoOperation:
-            return TCPOptNoOperation(len=1)
+            return TCPOptEOL(len=1)
+        if type is TCPOptType.NOP:
+            return TCPOptNOP(len=1)
 
         len = buffer.pop_int(1)
         if len < 2:
@@ -83,7 +89,7 @@ class TCPOpt(Packet):
         kwargs: dict[str, Any],
         ctx: PacketParseCtx,
     ) -> Self:
-        raise NotImplementedError
+        return cls(**kwargs)
 
     def guess_payload_cls(
         self,
@@ -126,18 +132,18 @@ class TCPOptUnknown(TCPOpt):
         return cls(**kwargs)
 
 
-class TCPOptEndOfOptionList(TCPOpt):
-    type = TCPOptType.EndOfOptionList
+class TCPOptEOL(TCPOpt):
+    type = TCPOptType.EOL
 
 
-class TCPOptNoOperation(TCPOpt):
-    type = TCPOptType.NoOperation
+class TCPOptNOP(TCPOpt):
+    type = TCPOptType.NOP
 
 
 class TCPOptMSS(TCPOpt):
     mss: int
 
-    type = TCPOptType.MaximumSegmentSize
+    type = TCPOptType.MSS
 
     def __init__(self, mss: Optional[int] = 1220, **kwargs):
         super().__init__(**kwargs)
@@ -158,6 +164,115 @@ class TCPOptMSS(TCPOpt):
     ) -> Self:
         mss = buffer.pop_int(2)
         kwargs['mss'] = mss
+        return cls(**kwargs)
+
+
+class TCPOptWS(TCPOpt):
+    cnt: int
+
+    type = TCPOptType.WS
+
+    def __init__(
+        self,
+        cnt: Optional[int] = 0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if cnt is None:
+            cnt = 0
+        self.cnt = cnt
+
+    def build_opt(self, ctx: PacketBuildCtx) -> bytes:
+        return self.cnt.to_bytes(1, 'big')
+
+    @classmethod
+    def parse_opt_from_buffer(
+        cls,
+        type: _TCPOptType,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        cnt = buffer.pop_int(1)
+        kwargs['cnt'] = cnt
+        return cls(**kwargs)
+
+
+class TCPOptTS(TCPOpt):
+    val: int
+    ecr: int
+
+    type = TCPOptType.TS
+
+    def __init__(
+        self,
+        val: Optional[int] = 0,
+        ecr: Optional[int] = 0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if val is None:
+            val = 0
+        if ecr is None:
+            ecr = 0
+        self.val = val
+        self.ecr = ecr
+
+    def build_opt(self, ctx: PacketBuildCtx) -> bytes:
+        return self.val.to_bytes(4, 'big') + self.ecr.to_bytes(4, 'big')
+
+    @classmethod
+    def parse_opt_from_buffer(
+        cls,
+        type: _TCPOptType,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        val = buffer.pop_int(4)
+        ecr = buffer.pop_int(4)
+        kwargs['val'] = val
+        kwargs['ecr'] = ecr
+        return cls(**kwargs)
+
+
+class TCPOptSACKOK(TCPOpt):
+    type = TCPOptType.SACKOK
+
+
+class TCPOptSACK(TCPOpt):
+    edges: list[int]
+
+    type = TCPOptType.SACK
+
+    def __init__(
+        self,
+        edges: Optional[Union[int, list[int]]] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if edges is None:
+            edges = list()
+        if isinstance(edges, int):
+            edges = [edges]
+        self.edges = edges
+
+    def build_opt(self, ctx: PacketBuildCtx) -> bytes:
+        return b''.join(edge.to_bytes(4, 'big') for edge in self.edges)
+
+    @classmethod
+    def parse_opt_from_buffer(
+        cls,
+        type: _TCPOptType,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        edges = list()
+        while not buffer.empty():
+            edge = buffer.pop_int(4)
+            edges.append(edge)
+        kwargs['edges'] = edges
         return cls(**kwargs)
 
 
@@ -259,10 +374,10 @@ class TCP(IPProtoHeader, IPChecksumable):
         if mod != 0:
             assert self.opts is not None
             div += 1
-            if isinstance(self.opts.last_payload, TCPOptEndOfOptionList):
+            if isinstance(self.opts.last_payload, TCPOptEOL):
                 opts += bytes(8 - mod)
             else:
-                self.opts /= TCPOptEndOfOptionList(len=1)
+                self.opts /= TCPOptEOL(len=1)
                 opts += b'\x01' + bytes(7 - mod)
         offset = div + 5
         self.offset = ctx.conflict_act.resolve(self.offset, offset)
