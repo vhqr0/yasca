@@ -55,7 +55,7 @@ class EtherChainedHeader(Packet):
     ) -> int:
         return EtherProto.pop_from_buffer(buffer)
 
-    def guess_payload_cls(self, ctx) -> Optional[type['Packet']]:
+    def guess_payload_cls(self, ctx) -> Optional[type[Packet]]:
         if self.nh is not None:
             return EtherProtoHeader.proto_dict.get(self.nh)
         return super().guess_payload_cls(ctx)

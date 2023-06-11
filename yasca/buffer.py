@@ -1,10 +1,13 @@
+from typing import Union
+
+
 class Buffer:
     buf: bytes
     len: int
     cur: int
 
-    def __init__(self, buf: bytes):
-        self.buf = buf
+    def __init__(self, buf: Union['Buffer', bytes]):
+        self.buf = bytes(buf)
         self.len = len(self.buf)
         self.cur = 0
 

@@ -116,12 +116,7 @@ class Packet:
 
     def __bytes__(self) -> bytes:
         ctx = PacketBuildCtx()
-        self.init_build_ctx(ctx)
         return self.build(ctx)
-
-    def init_build_ctx(self, ctx: PacketBuildCtx):
-        if self.payload is not None:
-            self.payload.init_build_ctx(ctx)
 
     def build(self, ctx: PacketBuildCtx) -> bytes:
         payload = self.build_payload(ctx)
@@ -136,10 +131,27 @@ class Packet:
         raise NotImplementedError
 
     @classmethod
-    def parse(cls, buf: bytes) -> Self:
-        ctx = PacketParseCtx()
+    def parse(
+        cls,
+        buf: Union[Buffer, bytes],
+        ctx: Optional[PacketParseCtx] = None,
+    ) -> Optional[Union[Self, 'Payload']]:
+        if ctx is None:
+            ctx = PacketParseCtx()
         buffer = Buffer(buf)
-        return cls.parse_from_buffer(buffer, ctx)
+
+        if buffer.empty():
+            if ctx.ensure_payload_type:
+                raise ValueError
+            return None
+
+        try:
+            return cls.parse_from_buffer(buffer, ctx)
+        except Exception:
+            if ctx.ensure_payload_type:
+                raise
+
+        return Payload.parse_from_buffer(buffer, ctx)
 
     @classmethod
     def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
@@ -193,7 +205,7 @@ class Packet:
     @classmethod
     def get_fields(cls) -> list[str]:
         fields = list()
-        for pcls in cls.__mro__:
+        for pcls in reversed(cls.__mro__):
             init = pcls.__dict__.get('__init__')
             if hasattr(init, '__annotations__'):
                 for field in init.__annotations__:

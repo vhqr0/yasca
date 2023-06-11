@@ -86,11 +86,6 @@ class IPv4(EtherProtoHeader, IPChainedHeader):
         self.dst = dst
         self.opts = opts
 
-    def init_build_ctx(self, ctx: PacketBuildCtx):
-        ctx.ip_src = self.src
-        ctx.ip_dst = self.dst
-        super().init_build_ctx(ctx)
-
     def resolve_opts(self, ctx: PacketBuildCtx):
         div, mod = divmod(len(self.opts), 4)
         if mod == 0:
@@ -104,11 +99,29 @@ class IPv4(EtherProtoHeader, IPChainedHeader):
         raise RuntimeError
 
     def build(self, ctx: PacketBuildCtx) -> bytes:
+        origin_src, origin_dst = None, None
+
+        if hasattr(ctx, 'ip_src'):
+            origin_src = ctx.ip_src
+        if hasattr(ctx, 'ip_dst'):
+            origin_dst = ctx.ip_dst
+        ctx.ip_src = self.src
+        ctx.ip_dst = self.dst
+
+        buf = super().build(ctx)
+
+        if origin_src is not None:
+            ctx.ip_src = origin_src
+        if origin_dst is not None:
+            ctx.ip_dst = origin_dst
+
+        return buf
+
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
         self.resolve_nh(ctx)
         self.resolve_opts(ctx)
         assert isinstance(self.nh, int)
 
-        payload = self.build_payload(ctx)
         div, mod = divmod(len(self.opts), 4)
         if mod != 0:
             raise RuntimeError
@@ -193,10 +206,6 @@ class IPv4(EtherProtoHeader, IPChainedHeader):
 
 
 class IPv4Error(IPv4):
-
-    def init_build_ctx(self, ctx: PacketBuildCtx):
-        # skip init ctx.ip_src/dst
-        super(IPv4, self).init_build_ctx(ctx)
 
     @classmethod
     def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:

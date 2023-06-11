@@ -77,10 +77,8 @@ class ICMPv6(IPProtoHeader):
         if hasattr(cls, 'type') and cls.type not in cls.msg_dict:
             cls.msg_dict[cls.type] = cls
 
-    def build(self, ctx: PacketBuildCtx) -> bytes:
-        payload = self.build_payload(ctx)
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
         msg = self.build_msg(ctx)
-
         pre_checksum = ICMPv6Type.int2bytes(self.type) + \
             self.code.to_bytes(1, 'big')
         post_checksum = msg + payload
@@ -101,7 +99,7 @@ class ICMPv6(IPProtoHeader):
         raise NotImplementedError
 
     @classmethod
-    def parse_from_buffer(
+    def parse_header_from_buffer(
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
@@ -109,11 +107,9 @@ class ICMPv6(IPProtoHeader):
         type = ICMPv6Type.pop_from_buffer(buffer)
         code = buffer.pop_int(1)
         checksum = buffer.pop_int(2)
-        pcls = cls.msg_dict.get(type, ICMPv6Unknown)
         kwargs = {'code': code, 'checksum': checksum}
-        packet = pcls.parse_msg_from_buffer(type, buffer, kwargs, ctx)
-        packet.parse_payload_from_buffer(buffer, ctx)
-        return packet
+        pcls = cls.msg_dict.get(type, ICMPv6Unknown)
+        return pcls.parse_msg_from_buffer(type, buffer, kwargs, ctx)
 
     @classmethod
     def parse_msg_from_buffer(
@@ -156,7 +152,7 @@ class ICMPv6Unknown(ICMPv6):
 class ICMPv6Error(ICMPv6):
 
     def build_msg(self, ctx: PacketBuildCtx) -> bytes:
-        return b'\x00\x00\x00\x00'
+        return bytes(4)
 
     @classmethod
     def parse_msg_from_buffer(

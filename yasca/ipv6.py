@@ -2,7 +2,6 @@
 RFCs:
 - RFC8200: IPv6
 """
-from collections.abc import Iterator
 from typing import Any, Optional, Union
 
 from typing_extensions import Self
@@ -12,7 +11,8 @@ from .buffer import Buffer
 from .enums import U8Enum
 from .ether import EtherProto, EtherProtoHeader
 from .ip import IPChainedHeader, IPProto, IPProtoHeader, IPVersion
-from .packet import FieldConflictAct, Packet, PacketBuildCtx, PacketParseCtx
+from .packet import (FieldConflictAct, Packet, PacketBuildCtx, PacketParseCtx,
+                     Payload)
 
 
 class IPv6OptType(U8Enum):
@@ -69,10 +69,24 @@ class IPv6(EtherProtoHeader, IPChainedHeader):
         self.src = src
         self.dst = dst
 
-    def init_build_ctx(self, ctx: PacketBuildCtx):
+    def build(self, ctx: PacketBuildCtx) -> bytes:
+        origin_src, origin_dst = None, None
+
+        if hasattr(ctx, 'ip_src'):
+            origin_src = ctx.ip_src
+        if hasattr(ctx, 'ip_dst'):
+            origin_dst = ctx.ip_dst
         ctx.ip_src = self.src
         ctx.ip_dst = self.dst
-        super().init_build_ctx(ctx)
+
+        buf = super().build(ctx)
+
+        if origin_src is not None:
+            ctx.ip_src = origin_src
+        if origin_dst is not None:
+            ctx.ip_dst = origin_dst
+
+        return buf
 
     def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
         self.resolve_nh(ctx)
@@ -130,10 +144,6 @@ class IPv6(EtherProtoHeader, IPChainedHeader):
 
 class IPv6Error(IPv6):
 
-    def init_build_ctx(self, ctx: PacketBuildCtx):
-        # skip init ctx.ip_src/dst
-        super(IPv6, self).init_build_ctx(ctx)
-
     @classmethod
     def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
         ctx.ensure_payload_type = False
@@ -141,75 +151,7 @@ class IPv6Error(IPv6):
         return super().parse_from_buffer(buffer, ctx)
 
 
-class IPv6Ext(IPProtoHeader, IPChainedHeader):
-    len: Optional[int]
-
-    def __init__(self, len: Optional[int] = None, **kwargs):
-        super().__init__(**kwargs)
-        self.len = len
-
-    def build(self, ctx: PacketBuildCtx) -> bytes:
-        self.resolve_nh(ctx)
-        assert isinstance(self.nh, int)
-
-        payload = self.build_payload(ctx)
-        ext = self.build_ext(ctx)
-        div, mod = divmod(len(ext) + 2, 8)
-        if mod != 0:
-            raise RuntimeError
-        elen = div - 1
-        self.len = ctx.conflict_act.resolve(self.len, elen)
-        assert isinstance(self.len, int)
-        header = IPProto.int2bytes(self.nh) + \
-            self.len.to_bytes(1, 'big') + \
-            ext
-        return header + payload
-
-    def build_ext(self, ctx: PacketBuildCtx) -> bytes:
-        raise NotImplementedError
-
-    @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
-        nh = IPProto.pop_from_buffer(buffer)
-        len = buffer.pop_int(1)
-        ext = Buffer(buffer.pop((len + 1) * 8 - 2))
-        kwargs = {'nh': nh, 'len': len}
-        packet = cls.parse_ext_from_buffer(ext, kwargs, ctx)
-        packet.parse_payload_from_buffer(buffer, ctx)
-        return packet
-
-    @classmethod
-    def parse_ext_from_buffer(
-        cls,
-        buffer: Buffer,
-        kwargs: dict[str, Any],
-        ctx: PacketParseCtx,
-    ) -> Self:
-        raise NotImplementedError
-
-
-class IPv6ExtUnknown(IPv6Ext):
-    data: bytes
-
-    def __init__(
-        self,
-        proto: Optional[_IPProto] = IPProto.NoNext,
-        data: Optional[bytes] = None,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        if proto is None:
-            proto = IPProto.NoNext
-        if data is None:
-            data = bytes(6)
-        self.proto = proto
-        self.data = data
-
-    def build_ext(self, ctx: PacketBuildCtx) -> bytes:
-        return self.data
-
-
-class IPv6Opt:
+class IPv6Opt(Packet):
     opt_dict: dict[int, type['IPv6Opt']] = dict()
 
     type: _IPv6OptType
@@ -224,36 +166,38 @@ class IPv6Opt:
         if hasattr(cls, 'type') and cls.type not in cls.opt_dict:
             cls.opt_dict[cls.type] = cls
 
-    def build(self, ctx: PacketBuildCtx) -> bytes:
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
+        if isinstance(self, IPv6OptPad1):
+            return IPv6OptType.int2bytes(self.type)
+
         opt = self.build_opt(ctx)
-        olen = len(opt)
-        self.len = ctx.conflict_act.resolve(self.len, olen)
+        _len = len(opt)
+        self.len = ctx.conflict_act.resolve(self.len, _len)
         assert isinstance(self.len, int)
+
         return IPv6OptType.int2bytes(self.type) + \
             self.len.to_bytes(1, 'big') + \
-            opt
+            opt + \
+            payload
 
     def build_opt(self, ctx: PacketBuildCtx) -> bytes:
         raise NotImplementedError
 
     @classmethod
-    def parse_from_buffer(
+    def parse_header_from_buffer(
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
     ) -> 'IPv6Opt':
         type = IPv6OptType.pop_from_buffer(buffer)
-        if type == IPv6OptType.Pad1:
-            len = 0
-        else:
-            len = buffer.pop_int(1)
-        obuffer = Buffer(buffer.pop(len))
-        ocls = cls.opt_dict.get(type, IPv6OptUnknown)
+        if type is IPv6OptType.Pad1:
+            return IPv6OptPad1(len=0)
+
+        len = buffer.pop_int(1)
+        opt = buffer.pop(len)
         kwargs = {'len': len}
-        opt = ocls.parse_opt_from_buffer(type, obuffer, kwargs, ctx)
-        if not obuffer.empty():
-            raise RuntimeError
-        return opt
+        pcls = cls.opt_dict.get(type, IPv6OptUnknown)
+        return pcls.parse_opt_from_buffer(type, Buffer(opt), kwargs, ctx)
 
     @classmethod
     def parse_opt_from_buffer(
@@ -265,14 +209,8 @@ class IPv6Opt:
     ) -> Self:
         raise NotImplementedError
 
-    def __repr__(self) -> str:
-        fields = self.get_fields()
-        r = ','.join('{}={}'.format(f, repr(getattr(self, f))) for f in fields)
-        return '{}({})'.format(self.__class__.__name__, r)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        return ['len']
+    def guess_payload_cls(self, ctx) -> Optional[type[Packet]]:  # type: ignore
+        return IPv6Opt
 
 
 class IPv6OptUnknown(IPv6Opt):
@@ -308,28 +246,9 @@ class IPv6OptUnknown(IPv6Opt):
         kwargs['data'] = data
         return cls(**kwargs)
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['type', 'data']
-        return fields
-
 
 class IPv6OptPad1(IPv6Opt):
     type = IPv6OptType.Pad1
-
-    def build(self, ctx: PacketBuildCtx) -> bytes:
-        return IPv6OptType.int2bytes(self.type)
-
-    @classmethod
-    def parse_opt_from_buffer(
-        cls,
-        type: _IPv6OptType,
-        buffer: Buffer,
-        kwargs: dict[str, Any],
-        ctx: PacketParseCtx,
-    ) -> Self:
-        return cls(**kwargs)
 
 
 class IPv6OptPadN(IPv6Opt):
@@ -342,7 +261,7 @@ class IPv6OptPadN(IPv6Opt):
         if n is None:
             n = 2
         if n < 2:
-            raise RuntimeError
+            raise ValueError
         self.n = n
 
     def build_opt(self, ctx: PacketBuildCtx) -> bytes:
@@ -360,93 +279,51 @@ class IPv6OptPadN(IPv6Opt):
         kwargs['n'] = n
         return cls(**kwargs)
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('n')
-        return fields
 
+class IPv6ExtHeader(IPProtoHeader, IPChainedHeader):
+    len: Optional[int]
 
-class IPv6OptList:
-    opts: list[IPv6Opt]
-
-    def __init__(self, opts: Optional[Union[IPv6Opt, list[IPv6Opt]]] = None):
-        if opts is None:
-            opts = list()
-        if isinstance(opts, IPv6Opt):
-            opts = [opts]
-        self.opts = opts
-
-    def __iter__(self) -> Iterator[IPv6Opt]:
-        return iter(self.opts)
-
-    def __len__(self) -> int:
-        return len(self.opts)
-
-    def get(self, key: type[IPv6Opt]) -> Optional[IPv6Opt]:
-        for opt in self:
-            if isinstance(opt, key):
-                return opt
-        return None
-
-    def __contains__(self, key: type[IPv6Opt]) -> bool:
-        o = self.get(key)
-        return o is not None
-
-    def __getitem__(self, key: type[IPv6Opt]) -> IPv6Opt:
-        o = self.get(key)
-        if o is None:
-            raise KeyError
-        return o
-
-    def append(self, opt: IPv6Opt):
-        self.opts.append(opt)
-
-    def build(self, ctx: PacketBuildCtx) -> bytes:
-        buf = b''.join(opt.build(ctx) for opt in self)
-        div, mod = divmod(len(buf) + 2, 8)
-        act = ctx.conflict_act
-        if act is FieldConflictAct.Override:
-            return buf
-        if act is FieldConflictAct.Ignore:
-            pad: IPv6Opt
-            n = 8 - mod
-            if n == 1:
-                pad = IPv6OptPad1()
-            else:
-                pad = IPv6OptPadN(n)
-            self.append(pad)
-            buf += pad.build(ctx)
-            return buf
-        raise RuntimeError
-
-    @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
-        opts = list()
-        while not buffer.empty():
-            opts.append(IPv6Opt.parse_from_buffer(buffer, ctx))
-        return cls(opts)
-
-    def __repr__(self) -> str:
-        r = ','.join(repr(opt) for opt in self)
-        return '{}({})'.format(self.__class__.__name__, r)
-
-
-class IPv6ExtOptList(IPv6Ext):
-    opts: IPv6OptList
-
-    def __init__(
-        self,
-        opts: Optional[Union[IPv6OptList, IPv6Opt, list[IPv6Opt]]] = None,
-        **kwargs,
-    ):
+    def __init__(self, len: Optional[int] = None, **kwargs):
         super().__init__(**kwargs)
-        if not isinstance(opts, IPv6OptList):
-            opts = IPv6OptList(opts)
-        self.opts = opts
+        self.len = len
+
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
+        self.resolve_nh(ctx)
+        assert isinstance(self.nh, int)
+
+        ext = self.build_ext(ctx)
+        if isinstance(self, IPv6ExtFragment):
+            _len = 0
+        else:
+            div, mod = divmod(len(ext) + 2, 8)
+            if mod != 0:
+                raise RuntimeError
+            _len = div - 1
+        self.len = ctx.conflict_act.resolve(self.len, _len)
+        assert isinstance(self.len, int)
+
+        return IPProto.int2bytes(self.nh) + \
+            self.len.to_bytes(1, 'big') + \
+            ext + \
+            payload
 
     def build_ext(self, ctx: PacketBuildCtx) -> bytes:
-        return self.opts.build(ctx)
+        raise NotImplementedError
+
+    @classmethod
+    def parse_header_from_buffer(
+        cls,
+        buffer: Buffer,
+        ctx: PacketParseCtx,
+    ) -> Self:
+        nh = cls.parse_nh_from_buffer(buffer, ctx)
+        len = buffer.pop_int(1)
+        if nh is IPProto.Fragment:
+            ext = buffer.pop(6)
+        else:
+            ext = buffer.pop((len + 1) * 8 - 2)
+        kwargs = {'nh': nh, 'len': len}
+        return cls.parse_ext_from_buffer(Buffer(ext), kwargs, ctx)
 
     @classmethod
     def parse_ext_from_buffer(
@@ -455,7 +332,81 @@ class IPv6ExtOptList(IPv6Ext):
         kwargs: dict[str, Any],
         ctx: PacketParseCtx,
     ) -> Self:
-        opts = IPv6OptList.parse_from_buffer(buffer, ctx)
+        raise NotImplementedError
+
+
+# Notice: IPv6ExtHeader is not a dispatched parser, therefore
+# IPv6ExtUnknown, unlike IPv6OptUnknown or ICMPv6Unknown, is a
+# build-only class for custom ext type and other fields. If you want
+# to parse an ext with custom type, you have better to def a new
+# IPv6ExtHeader instead.
+class IPv6ExtUnknown(IPv6ExtHeader):
+    data: bytes
+
+    def __init__(
+        self,
+        proto: Optional[_IPProto] = IPProto.NoNext,
+        data: Optional[bytes] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if proto is None:
+            proto = IPProto.NoNext
+        if data is None:
+            data = bytes(6)
+        self.proto = proto
+        self.data = data
+
+    def build_ext(self, ctx: PacketBuildCtx) -> bytes:
+        return self.data
+
+
+class IPv6ExtOptList(IPv6ExtHeader):
+    opts: Optional[Union[IPv6Opt, Payload]]
+
+    def __init__(
+        self,
+        opts: Optional[Union[IPv6Opt, Payload, bytes, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if opts is not None:
+            if not isinstance(opts, Packet):
+                opts = Payload(opts)
+        self.opts = opts
+
+    def build_ext(self, ctx: PacketBuildCtx) -> bytes:
+        if self.opts is None:
+            ext = b''
+        else:
+            ext = self.opts.build(ctx)
+        div, mod = divmod(len(ext) + 2, 8)
+        act = ctx.conflict_act
+        if act is FieldConflictAct.Override:
+            return ext
+        if act is FieldConflictAct.Ignore:
+            pad: IPv6Opt
+            n = 8 - mod
+            if n == 1:
+                pad = IPv6OptPad1()
+            else:
+                pad = IPv6OptPadN(n)
+            if self.opts is None:
+                self.opts = pad
+            else:
+                self.opts /= pad
+            ext += pad.build(ctx)
+            return ext
+        raise RuntimeError
+
+    @classmethod
+    def parse_ext_from_buffer(
+        cls,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        opts = IPv6Opt.parse(buffer, ctx)
         kwargs['opts'] = opts
         return cls(**kwargs)
 
@@ -468,7 +419,7 @@ class IPv6ExtDestination(IPv6ExtOptList):
     proto = IPProto.DestinationOption
 
 
-class IPv6ExtFragment(IPv6Ext):
+class IPv6ExtFragment(IPv6ExtHeader):
     offset: int
     M: bool
     id: int
@@ -493,32 +444,11 @@ class IPv6ExtFragment(IPv6Ext):
         self.M = M
         self.id = id
 
-    def build(self, ctx: PacketBuildCtx) -> bytes:
-        self.resolve_nh(ctx)
-        assert isinstance(self.nh, int)
-
-        payload = self.build_payload(ctx)
-        ext = self.build_ext(ctx)
-        header = IPProto.int2bytes(self.nh) + \
-            b'\x00' + \
-            ext
-        return header + payload
-
     def build_ext(self, ctx: PacketBuildCtx) -> bytes:
         i = (self.offset << 3) + int(self.M)
         i <<= 32
         i += self.id & 0xffffffff
         return i.to_bytes(6, 'big')
-
-    @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
-        nh = IPProto.pop_from_buffer(buffer)
-        buffer.pop_int(1)  # reserved
-        ext = Buffer(buffer.pop(6))
-        kwargs = {'nh': nh}
-        packet = cls.parse_ext_from_buffer(ext, kwargs, ctx)
-        packet.parse_payload_from_buffer(buffer, ctx)
-        return packet
 
     @classmethod
     def parse_ext_from_buffer(
