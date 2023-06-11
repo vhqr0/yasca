@@ -2,13 +2,163 @@
 RFCs:
 - RFC9293: TCP
 """
-from typing import Optional
+from typing import Any, Optional, Union
 
 from typing_extensions import Self
 
 from .buffer import Buffer
+from .enums import U8Enum
 from .ip import IPChecksumable, IPProto, IPProtoHeader
-from .packet import FieldConflictAct, PacketBuildCtx, PacketParseCtx
+from .packet import Packet, PacketBuildCtx, PacketParseCtx, Payload
+
+
+class TCPOptType(U8Enum):
+    EndOfOptionList = 0
+    NoOperation = 1
+    MaximumSegmentSize = 2
+
+
+_TCPOptType = Union[TCPOptType, int]
+
+
+class TCPOpt(Packet):
+    opt_dict: dict[int, type['TCPOpt']] = dict()
+
+    type: _TCPOptType
+    len: Optional[int]
+
+    def __init__(self, len: Optional[int] = None, **kwargs):
+        super().__init__(**kwargs)
+        self.len = len
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if hasattr(cls, 'type') and cls.type not in cls.opt_dict:
+            cls.opt_dict[cls.type] = cls
+
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
+        if isinstance(self, TCPOptEndOfOptionList) or \
+           isinstance(self, TCPOptNoOperation):
+            return TCPOptType.int2bytes(self.type)
+
+        opt = self.build_opt(ctx)
+        _len = len(opt) + 2
+        self.len = ctx.conflict_act.resolve(self.len, _len)
+        assert isinstance(self.len, int)
+
+        return TCPOptType.int2bytes(self.type) + \
+            self.len.to_bytes(1, 'big') + \
+            opt + \
+            payload
+
+    def build_opt(self, ctx: PacketBuildCtx) -> bytes:
+        raise NotImplementedError
+
+    @classmethod
+    def parse_header_from_buffer(
+        cls,
+        buffer: Buffer,
+        ctx: PacketParseCtx,
+    ) -> Packet:
+        type = TCPOptType.pop_from_buffer(buffer)
+        if type is TCPOptType.EndOfOptionList:
+            buffer.pop_all()
+            return TCPOptEndOfOptionList(len=1)
+        if type is TCPOptType.NoOperation:
+            return TCPOptNoOperation(len=1)
+
+        len = buffer.pop_int(1)
+        if len < 2:
+            raise RuntimeError
+        opt = buffer.pop(len - 2)
+        kwargs = {'len': len}
+        pcls = cls.opt_dict.get(type, TCPOptUnknown)
+        return pcls.parse_opt_from_buffer(type, Buffer(opt), kwargs, ctx)
+
+    @classmethod
+    def parse_opt_from_buffer(
+        cls,
+        type: _TCPOptType,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        raise NotImplementedError
+
+    def guess_payload_cls(
+        self,
+        ctx: PacketParseCtx,
+    ) -> Optional[type[Packet]]:  # type: ignore
+        return TCPOpt
+
+
+class TCPOptUnknown(TCPOpt):
+    data: bytes
+
+    def __init__(
+        self,
+        type: Optional[_TCPOptType] = 0,
+        data: Optional[bytes] = b'',
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if type is None:
+            type = 0
+        if data is None:
+            data = b''
+        self.type = type
+        self.data = data
+
+    def build_opt(self, ctx: PacketBuildCtx) -> bytes:
+        return self.data
+
+    @classmethod
+    def parse_opt_from_buffer(
+        cls,
+        type: _TCPOptType,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        data = buffer.pop_all()
+        kwargs['type'] = type
+        kwargs['data'] = data
+        return cls(**kwargs)
+
+
+class TCPOptEndOfOptionList(TCPOpt):
+    type = TCPOptType.EndOfOptionList
+
+
+class TCPOptNoOperation(TCPOpt):
+    type = TCPOptType.NoOperation
+
+
+class TCPOptMSS(TCPOpt):
+    mss: int
+
+    type = TCPOptType.MaximumSegmentSize
+
+    def __init__(self, mss: Optional[int] = 1220, **kwargs):
+        super().__init__(**kwargs)
+        if mss is None:
+            mss = 1220
+        self.mss = mss
+
+    def build_opt(self, ctx: PacketBuildCtx) -> bytes:
+        return self.mss.to_bytes(2, 'big')
+
+    @classmethod
+    def parse_opt_from_buffer(
+        cls,
+        type: _TCPOptType,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Self:
+        mss = buffer.pop_int(2)
+        kwargs['mss'] = mss
+        return cls(**kwargs)
 
 
 class TCP(IPProtoHeader, IPChecksumable):
@@ -27,7 +177,7 @@ class TCP(IPProtoHeader, IPChecksumable):
     FIN: bool
     window: int
     ptr: int
-    opts: bytes
+    opts: Optional[Packet]
 
     proto = IPProto.TCP
 
@@ -48,7 +198,7 @@ class TCP(IPProtoHeader, IPChecksumable):
         FIN: Optional[bool] = False,
         window: Optional[int] = 65535,
         ptr: Optional[int] = 0,
-        opts: Optional[bytes] = b'',
+        opts: Optional[Union[Packet, bytes, int]] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -80,8 +230,9 @@ class TCP(IPProtoHeader, IPChecksumable):
             window = 65535
         if ptr is None:
             ptr = 0
-        if opts is None:
-            opts = b''
+        if opts is not None:
+            if not isinstance(opts, Packet):
+                opts = Payload(opts)
         self.src = src
         self.dst = dst
         self.seqno = seqno
@@ -99,23 +250,20 @@ class TCP(IPProtoHeader, IPChecksumable):
         self.ptr = ptr
         self.opts = opts
 
-    def resolve_opts(self, ctx: PacketBuildCtx):
-        div, mod = divmod(len(self.opts), 4)
-        if mod == 0:
-            return
-        act = ctx.conflict_act
-        if act is FieldConflictAct.Override:
-            return
-        if act is FieldConflictAct.Ignore:
-            self.opts += bytes(8 - mod)
-            return
-        raise RuntimeError
-
     def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
-        self.resolve_opts(ctx)
-        div, mod = divmod(len(self.opts), 4)
+        if self.opts is None:
+            opts = b''
+        else:
+            opts = self.opts.build(ctx)
+        div, mod = divmod(len(opts), 4)
         if mod != 0:
-            raise RuntimeError
+            assert self.opts is not None
+            div += 1
+            if isinstance(self.opts.last_payload, TCPOptEndOfOptionList):
+                opts += bytes(8 - mod)
+            else:
+                self.opts /= TCPOptEndOfOptionList(len=1)
+                opts += b'\x01' + bytes(7 - mod)
         offset = div + 5
         self.offset = ctx.conflict_act.resolve(self.offset, offset)
         assert isinstance(self.offset, int)
@@ -136,7 +284,7 @@ class TCP(IPProtoHeader, IPChecksumable):
             i.to_bytes(2, 'big') + \
             self.window.to_bytes(2, 'big')
         post_checksum = self.ptr.to_bytes(2, 'big') + \
-            self.opts + \
+            opts + \
             payload
         return self.ipproto_checksum_resolve_and_build(
             pre_checksum,
@@ -150,7 +298,7 @@ class TCP(IPProtoHeader, IPChecksumable):
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
-    ) -> Self:
+    ) -> Packet:
         src = buffer.pop_int(2)
         dst = buffer.pop_int(2)
         seqno = buffer.pop_int(4)
@@ -168,9 +316,12 @@ class TCP(IPProtoHeader, IPChecksumable):
         window = buffer.pop_int(2)
         checksum = buffer.pop_int(2)
         ptr = buffer.pop_int(2)
+
         if offset < 5:
             raise RuntimeError
-        opts = buffer.pop((offset - 5) * 4)
+        buf = buffer.pop((offset - 5) * 4)
+        opts = TCPOpt.parse(buf, ctx)
+
         return cls(
             src=src,
             dst=dst,

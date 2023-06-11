@@ -281,7 +281,7 @@ class ICMPv6NDOpt(Packet):
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
-    ) -> 'ICMPv6NDOpt':
+    ) -> Packet:
         type = ICMPv6NDOptType.pop_from_buffer(buffer)
         len = buffer.pop_int(1) * 8 - 2
         if len < 0:

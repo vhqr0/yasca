@@ -91,7 +91,7 @@ class ICMPv4(IPProtoHeader, IPChecksumable):
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
-    ) -> 'ICMPv4':
+    ) -> Packet:
         type = ICMPv4Type.pop_from_buffer(buffer)
         code = buffer.pop_int(1)
         checksum = buffer.pop_int(2)

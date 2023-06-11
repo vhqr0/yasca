@@ -90,7 +90,7 @@ class ICMPv6(IPProtoHeader, IPChecksumable):
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
-    ) -> 'ICMPv6':
+    ) -> Packet:
         type = ICMPv6Type.pop_from_buffer(buffer)
         code = buffer.pop_int(1)
         checksum = buffer.pop_int(2)

@@ -4,13 +4,11 @@ RFCs:
 """
 from typing import Optional, Union
 
-from typing_extensions import Self
-
 from .addr import IPv4Address, MACAddress
 from .buffer import Buffer
 from .enums import U16Enum
 from .ether import EtherProto, EtherProtoHeader, EtherType
-from .packet import PacketBuildCtx, PacketParseCtx
+from .packet import Packet, PacketBuildCtx, PacketParseCtx
 
 
 class ARPOperation(U16Enum):
@@ -112,7 +110,7 @@ class ARP(EtherProtoHeader):
         return header + payload
 
     @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Packet:
         hwtype = EtherType.pop_from_buffer(buffer)
         prototype = EtherProto.pop_from_buffer(buffer)
         hwlen = buffer.pop_int(1)

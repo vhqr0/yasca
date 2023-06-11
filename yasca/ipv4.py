@@ -4,13 +4,11 @@ RFCs:
 """
 from typing import Optional, Union
 
-from typing_extensions import Self
-
 from .addr import IPv4Address
 from .buffer import Buffer
 from .ether import EtherProto, EtherProtoHeader
 from .ip import IPChainedHeader, IPChecksumable, IPProto, IPVersion
-from .packet import FieldConflictAct, PacketBuildCtx, PacketParseCtx
+from .packet import FieldConflictAct, Packet, PacketBuildCtx, PacketParseCtx
 
 _IPv4Address = Union[IPv4Address, str, int, bytes]
 _IPVersion = Union[IPVersion, int]
@@ -155,7 +153,7 @@ class IPv4(EtherProtoHeader, IPChainedHeader, IPChecksumable):
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
-    ) -> Self:
+    ) -> Packet:
         i = buffer.pop_int(1)
         ver = IPVersion.wrap((i >> 4) & 0xf)
         ihl = i & 0xf
@@ -174,7 +172,14 @@ class IPv4(EtherProtoHeader, IPChainedHeader, IPChecksumable):
         if ihl < 5:
             raise RuntimeError
         opts = buffer.pop((ihl - 5) * 4)
-        packet = cls(
+
+        plen = tlen - (4 * ihl)
+        if ctx.ensure_payload_len:
+            if plen > len(buffer):
+                raise RuntimeError
+        buffer.narrow(plen)
+
+        return cls(
             nh=nh,
             ver=ver,
             ihl=ihl,
@@ -190,19 +195,12 @@ class IPv4(EtherProtoHeader, IPChainedHeader, IPChecksumable):
             dst=dst,
             opts=opts,
         )
-        plen = tlen - (4 * ihl)
-        if ctx.ensure_payload_len:
-            if plen > len(buffer):
-                raise RuntimeError
-        buffer.narrow(plen)
-        packet.parse_payload_from_buffer(buffer, ctx)
-        return packet
 
 
 class IPv4Error(IPv4):
 
     @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Packet:
         ctx.ensure_payload_type = False
         ctx.ensure_payload_len = False
         return super().parse_from_buffer(buffer, ctx)

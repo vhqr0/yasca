@@ -1,7 +1,5 @@
 from typing import Optional, Union
 
-from typing_extensions import Self
-
 from .addr import MACAddress
 from .buffer import Buffer
 from .enums import U16Enum
@@ -92,7 +90,7 @@ class Ether(EtherChainedHeader):
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
-    ) -> Self:
+    ) -> Packet:
         dst = MACAddress.pop_from_buffer(buffer)
         src = MACAddress.pop_from_buffer(buffer)
         nh = cls.parse_nh_from_buffer(buffer, ctx)

@@ -114,7 +114,7 @@ class IPv6(EtherProtoHeader, IPChainedHeader):
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
-    ) -> Self:
+    ) -> Packet:
         i = buffer.pop_int(4)
         ver = IPVersion.wrap((i >> 28) & 0xf)
         tc = (i >> 20) & 0xff
@@ -145,7 +145,7 @@ class IPv6(EtherProtoHeader, IPChainedHeader):
 class IPv6Error(IPv6):
 
     @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Packet:
         ctx.ensure_payload_type = False
         ctx.ensure_payload_len = False
         return super().parse_from_buffer(buffer, ctx)
@@ -188,7 +188,7 @@ class IPv6Opt(Packet):
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
-    ) -> 'IPv6Opt':
+    ) -> Packet:
         type = IPv6OptType.pop_from_buffer(buffer)
         if type is IPv6OptType.Pad1:
             return IPv6OptPad1(len=0)
@@ -221,13 +221,13 @@ class IPv6OptUnknown(IPv6Opt):
 
     def __init__(
         self,
-        type: Optional[_IPv6OptType] = IPv6OptType.PadN,
+        type: Optional[_IPv6OptType] = 0,
         data: Optional[bytes] = b'',
         **kwargs,
     ):
         super().__init__(**kwargs)
         if type is None:
-            type = IPv6OptType.PadN
+            type = 0
         if data is None:
             data = b''
         self.type = type
@@ -318,7 +318,7 @@ class IPv6ExtHeader(IPProtoHeader, IPChainedHeader):
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
-    ) -> Self:
+    ) -> Packet:
         nh = cls.parse_nh_from_buffer(buffer, ctx)
         len = buffer.pop_int(1)
         if nh is IPProto.Fragment:

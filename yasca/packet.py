@@ -135,7 +135,7 @@ class Packet:
         cls,
         buf: Union[Buffer, bytes],
         ctx: Optional[PacketParseCtx] = None,
-    ) -> Optional[Union[Self, 'Payload']]:
+    ) -> Optional['Packet']:
         if ctx is None:
             ctx = PacketParseCtx()
         buffer = Buffer(buf)
@@ -154,7 +154,11 @@ class Packet:
         return Payload.parse_from_buffer(buffer, ctx)
 
     @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+    def parse_from_buffer(
+        cls,
+        buffer: Buffer,
+        ctx: PacketParseCtx,
+    ) -> 'Packet':
         packet = cls.parse_header_from_buffer(buffer, ctx)
         packet.parse_payload_from_buffer(buffer, ctx)
         return packet
@@ -164,7 +168,7 @@ class Packet:
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
-    ) -> Self:
+    ) -> 'Packet':
         raise NotImplementedError
 
     def parse_payload_from_buffer(self, buffer: Buffer, ctx: PacketParseCtx):
@@ -234,6 +238,6 @@ class Payload(Packet):
         return self.data
 
     @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Packet:
         data = buffer.pop_all()
         return cls(data=data)

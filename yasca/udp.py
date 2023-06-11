@@ -4,11 +4,9 @@ RFCs:
 """
 from typing import Optional
 
-from typing_extensions import Self
-
 from .buffer import Buffer
 from .ip import IPChecksumable, IPProto, IPProtoHeader
-from .packet import PacketBuildCtx, PacketParseCtx
+from .packet import Packet, PacketBuildCtx, PacketParseCtx
 
 
 class UDP(IPProtoHeader, IPChecksumable):
@@ -55,7 +53,7 @@ class UDP(IPProtoHeader, IPChecksumable):
         cls,
         buffer: Buffer,
         ctx: PacketParseCtx,
-    ) -> Self:
+    ) -> Packet:
         src = buffer.pop_int(2)
         dst = buffer.pop_int(2)
         tlen = buffer.pop_int(2)
