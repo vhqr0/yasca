@@ -67,52 +67,52 @@ class PacketParseCtx:
         self.ensure_payload_len = ensure_payload_len
 
 
-class Packet:
-    next_packet: Optional[Union['Packet', bytes]]
+_Payload = Optional[Union['Packet', bytes, int]]
 
-    def __init__(self, next_packet: Optional[Union['Packet', bytes]] = None):
-        self.next_packet = next_packet
+
+class Packet:
+    payload: Optional['Packet']
+
+    def __init__(self, payload: _Payload = None):
+        if payload is not None:
+            if not isinstance(payload, Packet):
+                payload = Payload(payload)
+        self.payload = payload
+
+    def __iter__(self) -> Generator['Packet', None, None]:
+        packet: Optional[Packet] = self
+        while packet is not None:
+            yield packet
+            packet = packet.payload
 
     @property
-    def last_packet(self) -> 'Packet':
-        p: Packet = self
-        next_packet = p.next_packet
-        while isinstance(next_packet, Packet):
-            p = next_packet
-            next_packet = p.next_packet
-        return p
+    def last_payload(self) -> 'Packet':
+        payload: Packet = self
+        for packet in self:
+            payload = packet
+        return payload
 
-    def __truediv__(self, next_packet: Union['Packet', bytes]) -> Self:
-        p = self.last_packet
-        if p.next_packet is not None:
-            raise RuntimeError
-        p.next_packet = next_packet
+    def __truediv__(self, payload: _Payload) -> Self:
+        if payload is not None:
+            if not isinstance(payload, Packet):
+                payload = Payload(payload)
+            self.last_payload.payload = payload
         return self
 
-    def __iter__(self) -> Generator[Union['Packet', bytes], None, None]:
-        p: Optional[Union[Packet, bytes]] = self
-        while p is not None:
-            yield p
-            if isinstance(p, Packet):
-                p = p.next_packet
-            else:
-                p = None
-
     def get(self, key: type['Packet']) -> Optional['Packet']:
-        for p in self:
-            if isinstance(p, key):
-                return p
+        for packet in self:
+            if isinstance(packet, key):
+                return packet
         return None
 
     def __contains__(self, key: type['Packet']) -> bool:
-        p = self.get(key)
-        return p is not None
+        return self.get(key) is not None
 
     def __getitem__(self, key: type['Packet']) -> 'Packet':
-        p = self.get(key)
-        if p is None:
+        packet = self.get(key)
+        if packet is None:
             raise KeyError
-        return p
+        return packet
 
     def __bytes__(self) -> bytes:
         ctx = PacketBuildCtx()
@@ -120,19 +120,20 @@ class Packet:
         return self.build(ctx)
 
     def init_build_ctx(self, ctx: PacketBuildCtx):
-        if isinstance(self.next_packet, Packet):
-            self.next_packet.init_build_ctx(ctx)
+        if self.payload is not None:
+            self.payload.init_build_ctx(ctx)
 
     def build(self, ctx: PacketBuildCtx) -> bytes:
-        raise NotImplementedError
+        payload = self.build_payload(ctx)
+        return self.build_with_payload(payload, ctx)
 
     def build_payload(self, ctx: PacketBuildCtx) -> bytes:
-        next_packet = self.next_packet
-        if next_packet is None:
+        if self.payload is None:
             return b''
-        if isinstance(next_packet, bytes):
-            return next_packet
-        return next_packet.build(ctx)
+        return self.payload.build(ctx)
+
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
+        raise NotImplementedError
 
     @classmethod
     def parse(cls, buf: bytes) -> Self:
@@ -142,21 +143,34 @@ class Packet:
 
     @classmethod
     def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+        packet = cls.parse_header_from_buffer(buffer, ctx)
+        packet.parse_payload_from_buffer(buffer, ctx)
+        return packet
+
+    @classmethod
+    def parse_header_from_buffer(
+        cls,
+        buffer: Buffer,
+        ctx: PacketParseCtx,
+    ) -> Self:
         raise NotImplementedError
 
     def parse_payload_from_buffer(self, buffer: Buffer, ctx: PacketParseCtx):
-        assert self.next_packet is None
-        packet: Optional[Union['Packet', bytes]] = None
+        assert self.payload is None
+
+        if buffer.empty():
+            return
+
         pcls = self.guess_payload_cls(ctx)
         if pcls is not None:
             try:
-                packet = pcls.parse_from_buffer(buffer.copy(), ctx)
+                self.payload = pcls.parse_from_buffer(buffer.copy(), ctx)
+                return
             except Exception:
                 if ctx.ensure_payload_type:
                     raise
-        if packet is None and not buffer.empty():
-            packet = buffer.pop_all()
-        self.next_packet = packet
+
+        self.payload = Payload.parse_from_buffer(buffer, ctx)
 
     def guess_payload_cls(
         self,
@@ -170,12 +184,39 @@ class Packet:
     def __repr__(self) -> str:
         fields = self.get_fields()
         r = '\n'.join('  {}={},'.format(f, repr(getattr(self, f)))
-                      for f in fields)
+                      for f in fields if hasattr(self, f))
         r = '{}(\n{}\n)'.format(self.__class__.__name__, r)
-        if self.next_packet is None:
+        if self.payload is None:
             return r
-        return '{}/{}'.format(r, repr(self.next_packet))
+        return '{}/{}'.format(r, repr(self.payload))
 
     @classmethod
     def get_fields(cls) -> list[str]:
-        return list()
+        fields = list()
+        for pcls in cls.__mro__:
+            init = pcls.__dict__.get('__init__')
+            if hasattr(init, '__annotations__'):
+                for field in init.__annotations__:
+                    if field != 'payload':
+                        fields.append(field)
+        return fields
+
+
+class Payload(Packet):
+    data: bytes
+
+    def __init__(self, data: Optional[Union[bytes, int]] = b'', **kwargs):
+        super().__init__(**kwargs)
+        if data is None:
+            data = b''
+        if not isinstance(data, bytes):
+            data = bytes(data)
+        self.data = data
+
+    def build(self, ctx: PacketBuildCtx) -> bytes:
+        return self.data
+
+    @classmethod
+    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+        data = buffer.pop_all()
+        return cls(data=data)

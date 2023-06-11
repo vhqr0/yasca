@@ -153,19 +153,3 @@ class ARP(EtherProtoHeader):
             protosrc=protosrc,
             protodst=protodst,
         )
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += [
-            'hwtype',
-            'prototype',
-            'hwlen',
-            'protolen',
-            'op',
-            'hwsrc',
-            'hwdst',
-            'protosrc',
-            'protodst',
-        ]
-        return fields

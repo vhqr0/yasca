@@ -411,12 +411,6 @@ class ICMPv6ND(ICMPv6):
         kwargs['opts'] = opts
         return cls(**kwargs)
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('opts')
-        return fields
-
 
 class ICMPv6ND_RS(ICMPv6ND):
     type = ICMPv6Type.ND_RS
@@ -489,19 +483,6 @@ class ICMPv6ND_RA(ICMPv6ND):
         kwargs['opts'] = opts
         return cls(**kwargs)
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += [
-            'hlim',
-            'M',
-            'O',
-            'lifetime',
-            'reachable_time',
-            'retrans_timer',
-        ]
-        return fields
-
 
 class ICMPv6ND_NS(ICMPv6ND):
     target: IPv6Address
@@ -531,12 +512,6 @@ class ICMPv6ND_NS(ICMPv6ND):
         kwargs['target'] = target
         kwargs['opts'] = opts
         return cls(**kwargs)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('target')
-        return fields
 
 
 class ICMPv6ND_NA(ICMPv6ND):
@@ -600,12 +575,6 @@ class ICMPv6ND_NA(ICMPv6ND):
         kwargs['opts'] = opts
         return cls(**kwargs)
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['R', 'S', 'O', 'target']
-        return fields
-
 
 class ICMPv6ND_RM(ICMPv6ND):
     target: IPv6Address
@@ -649,9 +618,3 @@ class ICMPv6ND_RM(ICMPv6ND):
         kwargs['dest'] = dest
         kwargs['opts'] = opts
         return cls(**kwargs)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['target', 'dest']
-        return fields

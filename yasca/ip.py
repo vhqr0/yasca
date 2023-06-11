@@ -4,7 +4,7 @@ from typing import Optional, Union
 from .addr import IPAddress
 from .buffer import Buffer
 from .enums import U8Enum
-from .packet import Packet, PacketBuildCtx
+from .packet import Packet, PacketBuildCtx, PacketParseCtx
 
 
 class IPVersion(U8Enum):
@@ -50,20 +50,22 @@ class IPChainedHeader(Packet):
 
     def resolve_nh(self, ctx: PacketBuildCtx):
         nh: Optional[int] = None
-        if isinstance(self.next_packet, IPProtoHeader):
-            nh = self.next_packet.proto
+        if isinstance(self.payload, IPProtoHeader):
+            nh = self.payload.proto
         self.nh = ctx.conflict_act.resolve(self.nh, nh, IPProto.NoNext)
+
+    @classmethod
+    def parse_nh_from_buffer(
+        cls,
+        buffer: Buffer,
+        ctx: PacketParseCtx,
+    ) -> int:
+        return IPProto.pop_from_buffer(buffer)
 
     def guess_payload_cls(self, ctx) -> Optional[type['Packet']]:
         if self.nh is not None:
             return IPProtoHeader.proto_dict.get(self.nh)
         return super().guess_payload_cls(ctx)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('nh')
-        return fields
 
 
 def ip_sum(buf: bytes) -> int:

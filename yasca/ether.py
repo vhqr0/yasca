@@ -34,16 +34,41 @@ class EtherProtoHeader(Packet):
             cls.proto_dict[cls.proto] = cls
 
 
-class Ether(Packet):
+class EtherChainedHeader(Packet):
+    nh: Optional[_EtherProto]
+
+    def __init__(self, nh: Optional[_EtherProto] = None, **kwargs):
+        super().__init__(**kwargs)
+        self.nh = nh
+
+    def resolve_nh(self, ctx: PacketBuildCtx):
+        nh: Optional[int] = None
+        if isinstance(self.payload, EtherProtoHeader):
+            nh = self.payload.proto
+        self.nh = ctx.conflict_act.resolve(self.nh, nh, EtherProto.ALL)
+
+    @classmethod
+    def parse_nh_from_buffer(
+        cls,
+        buffer: Buffer,
+        ctx: PacketParseCtx,
+    ) -> int:
+        return EtherProto.pop_from_buffer(buffer)
+
+    def guess_payload_cls(self, ctx) -> Optional[type['Packet']]:
+        if self.nh is not None:
+            return EtherProtoHeader.proto_dict.get(self.nh)
+        return super().guess_payload_cls(ctx)
+
+
+class Ether(EtherChainedHeader):
     src: MACAddress
     dst: MACAddress
-    proto: Optional[_EtherProto]
 
     def __init__(
         self,
         src: Optional[_MACAddress] = None,
         dst: Optional[_MACAddress] = None,
-        proto: Optional[_EtherProto] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -53,48 +78,26 @@ class Ether(Packet):
             dst = MACAddress(dst)
         self.src = src
         self.dst = dst
-        self.proto = proto
 
-    def resolve_proto(self, ctx: PacketBuildCtx):
-        proto: Optional[int] = None
-        if isinstance(self.next_packet, EtherProtoHeader):
-            proto = self.next_packet.proto
-        self.proto = ctx.conflict_act.resolve(self.proto, proto,
-                                              EtherProto.IPv6)
-
-    def build(self, ctx: PacketBuildCtx) -> bytes:
-        self.resolve_proto(ctx)
-        assert isinstance(self.proto, int)
-
-        payload = self.build_payload(ctx)
-        header = bytes(self.dst) + \
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
+        self.resolve_nh(ctx)
+        assert isinstance(self.nh, int)
+        return bytes(self.dst) + \
             bytes(self.src) + \
-            EtherProto.int2bytes(self.proto)
-        return header + payload
+            EtherProto.int2bytes(self.nh) + \
+            payload
 
     @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+    def parse_header_from_buffer(
+        cls,
+        buffer: Buffer,
+        ctx: PacketParseCtx,
+    ) -> Self:
         dst = MACAddress.pop_from_buffer(buffer)
         src = MACAddress.pop_from_buffer(buffer)
-        proto = EtherProto.pop_from_buffer(buffer)
-        packet = cls(
+        nh = cls.parse_nh_from_buffer(buffer, ctx)
+        return cls(
+            nh=nh,
             src=src,
             dst=dst,
-            proto=proto,
         )
-        packet.parse_payload_from_buffer(buffer, ctx)
-        return packet
-
-    def guess_payload_cls(
-        self,
-        ctx: PacketParseCtx,
-    ) -> Optional[type['Packet']]:
-        if self.proto is not None:
-            return EtherProtoHeader.proto_dict.get(self.proto)
-        return super().guess_payload_cls(ctx)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['src', 'dst', 'proto']
-        return fields

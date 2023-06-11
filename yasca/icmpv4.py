@@ -127,12 +127,6 @@ class ICMPv4(IPProtoHeader):
     ) -> Self:
         raise NotImplementedError
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['code', 'checksum']
-        return fields
-
 
 class ICMPv4Unknown(ICMPv4):
 
@@ -205,12 +199,6 @@ class ICMPv4ParameterProblem(ICMPv4Error):
         kwargs['ptr'] = ptr
         return cls(**kwargs)
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('ptr')
-        return fields
-
 
 class ICMPv4SourceQuench(ICMPv4Error):
     type = ICMPv4Type.SourceQuench
@@ -241,12 +229,6 @@ class ICMPv4Redirect(ICMPv4Error):
         gw = IPv4Address.pop_from_buffer(buffer)
         kwargs['gw'] = gw
         return cls(**kwargs)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('gw')
-        return fields
 
 
 class ICMPv4Echo(ICMPv4):
@@ -283,12 +265,6 @@ class ICMPv4Echo(ICMPv4):
         kwargs['id'] = id
         kwargs['seq'] = seq
         return cls(**kwargs)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['id', 'seq']
-        return fields
 
 
 class ICMPv4EchoRequest(ICMPv4Echo):

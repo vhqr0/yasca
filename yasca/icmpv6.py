@@ -125,12 +125,6 @@ class ICMPv6(IPProtoHeader):
     ) -> Self:
         raise NotImplementedError
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['code', 'checksum']
-        return fields
-
 
 class ICMPv6Unknown(ICMPv6):
 
@@ -157,12 +151,6 @@ class ICMPv6Unknown(ICMPv6):
     ) -> Self:
         kwargs['type'] = type
         return cls(**kwargs)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('type')
-        return fields
 
 
 class ICMPv6Error(ICMPv6):
@@ -215,12 +203,6 @@ class ICMPv6PacketTooBig(ICMPv6Error):
         kwargs['mtu'] = mtu
         return cls(**kwargs)
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('mtu')
-        return fields
-
 
 class ICMPv6TimeExceed(ICMPv6Error):
     type = ICMPv6Type.TimeExceeded
@@ -251,12 +233,6 @@ class ICMPv6ParameterProblem(ICMPv6Error):
         ptr = buffer.pop_int(4)
         kwargs['ptr'] = ptr
         return cls(**kwargs)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('ptr')
-        return fields
 
 
 class ICMPv6Echo(ICMPv6):
@@ -293,12 +269,6 @@ class ICMPv6Echo(ICMPv6):
         kwargs['id'] = id
         kwargs['seq'] = seq
         return cls(**kwargs)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['id', 'seq']
-        return fields
 
 
 class ICMPv6EchoRequest(ICMPv6Echo):

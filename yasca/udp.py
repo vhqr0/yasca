@@ -81,9 +81,3 @@ class UDP(IPProtoHeader):
         buffer.narrow(plen)
         packet.parse_payload_from_buffer(buffer, ctx)
         return packet
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['src', 'dst', 'len', 'checksum']
-        return fields

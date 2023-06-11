@@ -198,27 +198,3 @@ class TCP(IPProtoHeader):
         )
         packet.parse_payload_from_buffer(buffer, ctx)
         return packet
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += [
-            'src',
-            'dst',
-            'seqno',
-            'ackno',
-            'offset',
-            'CWR',
-            'ECE',
-            'URG',
-            'ACK',
-            'PSH',
-            'RST',
-            'SYN',
-            'FIN',
-            'window',
-            'checksum',
-            'ptr',
-            'opts',
-        ]
-        return fields

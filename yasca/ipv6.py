@@ -74,11 +74,10 @@ class IPv6(EtherProtoHeader, IPChainedHeader):
         ctx.ip_dst = self.dst
         super().init_build_ctx(ctx)
 
-    def build(self, ctx: PacketBuildCtx) -> bytes:
+    def build_with_payload(self, payload: bytes, ctx: PacketBuildCtx) -> bytes:
         self.resolve_nh(ctx)
         assert isinstance(self.nh, int)
 
-        payload = self.build_payload(ctx)
         plen = len(payload)
         self.plen = ctx.conflict_act.resolve(self.plen, plen)
         assert isinstance(self.plen, int)
@@ -90,21 +89,34 @@ class IPv6(EtherProtoHeader, IPChainedHeader):
         i += ((self.plen & 0xffff) << 16) + \
             ((self.nh & 0xff) << 8) + \
             (self.hlim & 0xff)
-        header = i.to_bytes(8, 'big') + bytes(self.src) + bytes(self.dst)
-        return header + payload
+
+        return i.to_bytes(8, 'big') + \
+            bytes(self.src) + \
+            bytes(self.dst) + \
+            payload
 
     @classmethod
-    def parse_from_buffer(cls, buffer: Buffer, ctx: PacketParseCtx) -> Self:
+    def parse_header_from_buffer(
+        cls,
+        buffer: Buffer,
+        ctx: PacketParseCtx,
+    ) -> Self:
         i = buffer.pop_int(4)
         ver = IPVersion.wrap((i >> 28) & 0xf)
         tc = (i >> 20) & 0xff
         fl = i & 0xfff
         plen = buffer.pop_int(2)
-        nh = IPProto.pop_from_buffer(buffer)
+        nh = cls.parse_nh_from_buffer(buffer, ctx)
         hlim = buffer.pop_int(1)
         src = IPv6Address.pop_from_buffer(buffer)
         dst = IPv6Address.pop_from_buffer(buffer)
-        packet = cls(
+
+        if ctx.ensure_payload_len:
+            if plen > len(buffer):
+                raise RuntimeError
+        buffer.narrow(plen)
+
+        return cls(
             nh=nh,
             ver=ver,
             tc=tc,
@@ -114,18 +126,6 @@ class IPv6(EtherProtoHeader, IPChainedHeader):
             src=src,
             dst=dst,
         )
-        if ctx.ensure_payload_len:
-            if plen > len(buffer):
-                raise RuntimeError
-        buffer.narrow(plen)
-        packet.parse_payload_from_buffer(buffer, ctx)
-        return packet
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['ver', 'tc', 'fl', 'plen', 'hlim', 'src', 'dst']
-        return fields
 
 
 class IPv6Error(IPv6):
@@ -187,12 +187,6 @@ class IPv6Ext(IPProtoHeader, IPChainedHeader):
     ) -> Self:
         raise NotImplementedError
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('len')
-        return fields
-
 
 class IPv6ExtUnknown(IPv6Ext):
     data: bytes
@@ -213,12 +207,6 @@ class IPv6ExtUnknown(IPv6Ext):
 
     def build_ext(self, ctx: PacketBuildCtx) -> bytes:
         return self.data
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['proto', 'data']
-        return fields
 
 
 class IPv6Opt:
@@ -471,12 +459,6 @@ class IPv6ExtOptList(IPv6Ext):
         kwargs['opts'] = opts
         return cls(**kwargs)
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields.append('opts')
-        return fields
-
 
 class IPv6ExtHopByHop(IPv6ExtOptList):
     proto = IPProto.HopByHopOption
@@ -558,9 +540,3 @@ class IPv6ExtFragment(IPv6Ext):
         if self.offset != 0:
             return None
         return super().guess_payload_cls(ctx)
-
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += ['offset', 'M', 'id']
-        return fields

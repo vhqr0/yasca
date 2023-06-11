@@ -40,8 +40,7 @@ Higher priority first:
 
 
 1. Rewrite IPv4/IPv6/NDP/TCP Options as Packet
-2. Packet wrapper for bytes
-3. IGMP/MLD
-4. UDP upper layer protocol
-5. DNS/mDNS/LLMNR
-6. DHCPv4/DHCPv6
+2. IGMP/MLD
+3. UDP upper layer protocol
+4. DNS/mDNS/LLMNR
+5. DHCPv4/DHCPv6

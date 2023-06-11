@@ -191,26 +191,6 @@ class IPv4(EtherProtoHeader, IPChainedHeader):
         packet.parse_payload_from_buffer(buffer, ctx)
         return packet
 
-    @classmethod
-    def get_fields(cls) -> list[str]:
-        fields = super().get_fields()
-        fields += [
-            'ver',
-            'ihl',
-            'tos',
-            'tlen',
-            'id',
-            'DF',
-            'MF',
-            'offset',
-            'ttl',
-            'checksum',
-            'src',
-            'dst',
-            'opts',
-        ]
-        return fields
-
 
 class IPv4Error(IPv4):
 
