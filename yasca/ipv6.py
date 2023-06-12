@@ -2,6 +2,7 @@
 RFCs:
 - RFC8200: IPv6
 - RFC2675: IPv6 Opt Jumbo
+- RFC2460, RFC5095: IPv6 Routing Type 0
 """
 from typing import Any, Optional, Union
 
@@ -363,7 +364,7 @@ class IPv6ExtHeader(IPProtoHeader, IPChainedHeader):
         buffer: Buffer,
         kwargs: dict[str, Any],
         ctx: PacketParseCtx,
-    ) -> Self:
+    ) -> Packet:
         raise NotImplementedError
 
 
@@ -391,6 +392,58 @@ class IPv6ExtUnknown(IPv6ExtHeader):
 
     def build_ext(self, ctx: PacketBuildCtx) -> bytes:
         return self.data
+
+
+class IPv6ExtRouting(IPv6ExtHeader):
+    type: int
+    segs: int
+    addrs: list[IPv6Address]
+
+    proto = IPProto.Routing
+
+    def __init__(
+        self,
+        type: Optional[int] = 0,
+        segs: Optional[int] = 0,
+        addrs: Optional[Union[_IPv6Address, list[IPv6Address]]] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if type is None:
+            type = 0
+        if segs is None:
+            segs = 0
+        if not isinstance(addrs, (list, IPv6Address)):
+            addrs = IPv6Address(addrs)
+        if isinstance(addrs, IPv6Address):
+            addrs = [addrs]
+        self.type = type
+        self.segs = segs
+        self.addrs = addrs
+
+    def build_ext(self, ctx: PacketBuildCtx) -> bytes:
+        return self.type.to_bytes(1, 'big') + \
+            self.segs.to_bytes(1, 'big') + \
+            bytes(4) + \
+            b''.join(bytes(addr) for addr in self.addrs)
+
+    @classmethod
+    def parse_ext_from_buffer(
+        cls,
+        buffer: Buffer,
+        kwargs: dict[str, Any],
+        ctx: PacketParseCtx,
+    ) -> Packet:
+        type = buffer.pop_int(1)
+        segs = buffer.pop_int(1)
+        buffer.pop(4)
+        addrs = list()
+        while not buffer.empty():
+            addrs.append(IPv6Address.pop_from_buffer(buffer))
+        kwargs['type'] = type
+        kwargs['segs'] = segs
+        kwargs['addrs'] = addrs
+        return cls(**kwargs)
 
 
 class IPv6ExtOptList(IPv6ExtHeader):
@@ -437,7 +490,7 @@ class IPv6ExtOptList(IPv6ExtHeader):
         buffer: Buffer,
         kwargs: dict[str, Any],
         ctx: PacketParseCtx,
-    ) -> Self:
+    ) -> Packet:
         opts = IPv6Opt.parse(buffer, ctx)
         kwargs['opts'] = opts
         return cls(**kwargs)
@@ -488,7 +541,7 @@ class IPv6ExtFragment(IPv6ExtHeader):
         buffer: Buffer,
         kwargs: dict[str, Any],
         ctx: PacketParseCtx,
-    ) -> Self:
+    ) -> Packet:
         i = buffer.pop_int(2)
         offset = i >> 3
         M = bool(i & 1)
