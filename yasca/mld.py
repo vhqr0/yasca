@@ -68,13 +68,14 @@ class ICMPv6MLD(ICMPv6):
 
 
 class ICMPv6MLDQuery(ICMPv6MLD):
-    type = ICMPv6Type.MLDQuery
 
     def guess_payload_cls(
         self,
         ctx: PacketParseCtx,
     ) -> Optional[type[Packet]]:  # type: ignore
         return ICMPv6MLDv2QueryExt
+
+    type = ICMPv6Type.MLDQuery
 
 
 class ICMPv6MLDReport(ICMPv6MLD):

@@ -39,7 +39,6 @@ TODO
 Higher priority first:
 
 
-1. IGMP/MLD
-2. UDP upper layer protocol
-3. DNS/mDNS/LLMNR
-4. DHCPv4/DHCPv6
+1. UDP upper layer protocol
+2. DNS/mDNS/LLMNR
+3. DHCPv4/DHCPv6
