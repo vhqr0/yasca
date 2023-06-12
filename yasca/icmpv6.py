@@ -20,6 +20,10 @@ class ICMPv6Type(U8Enum):
     ParameterProblem = 4
     EchoRequest = 128
     EchoReply = 129
+    MLDQuery = 130
+    MLDReport = 131
+    MLDDone = 132
+    MLDv2Report = 143
     ND_RS = 133
     ND_RA = 134
     ND_NS = 135

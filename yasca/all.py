@@ -6,6 +6,7 @@ from .icmpv6 import *
 from .ip import *
 from .ipv4 import *
 from .ipv6 import *
+from .mld import *
 from .ndp import *
 from .packet import *
 from .tcp import *
